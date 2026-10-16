@@ -1314,5 +1314,5 @@ dialog label { grid-template-columns: minmax(0, 1fr); }
 }
 /* no focus ring on the pop-up itself (it gets focus on opening, which looked like a yellow "selected" border),
    and none at all on touch screens; keyboards on computers still get rings on buttons */
-dialog:focus, dialog:focus-visible { outline: none; }
-@media (pointer: coarse) { dialog :focus-visible { outline: none; } }
+dialog:focus, dialog:focus-visible { outline: none !important; } /* beats the refined look's accent focus ring */
+@media (pointer: coarse) { dialog :focus, dialog :focus-visible { outline: none !important; } }
