@@ -1,4 +1,4 @@
-import { MAX, ACCEPT_AUDIO, ACCEPT_IMAGE, kindOf } from './types.js';
+import { MAX, ACCEPT_AUDIO, ACCEPT_IMAGE, kindOf, extForType } from './types.js';
 import { icon } from './icons.js';
 import { settings, setSetting, ACCENTS } from './settings.js';
 import { decodeAudio, bpmKeyOf, parseName } from './detect.js';
@@ -88,6 +88,8 @@ function dialog(content, { className = '', locked = false } = {}) {
   });
   document.body.append(d);
   d.showModal();
+  const toasts = $('#toasts');
+  try { if (toasts?.childElementCount && toasts.matches(':popover-open')) { toasts.hidePopover(); toasts.showPopover(); } } catch {}
   // phones: don't jump into the first text box (that pops the keyboard up); prompts that want typing focus it themselves
   if (matchMedia('(pointer: coarse)').matches && /INPUT|TEXTAREA/.test(document.activeElement?.tagName)) { document.activeElement.blur(); d.focus?.(); }
   return d;
@@ -135,6 +137,7 @@ const trackOf = id => S.tracks.find(t => t.id === id) || S.sharedTracks.find(t =
 const roleOf = pid => projectOf(pid)?.role || 'owner';
 const canEdit = pid => roleOf(pid) !== 'viewer';
 const isShared = pid => !!projectOf(pid)?.owner;
+const canComment = pid => !isShared(pid) || !!projectOf(pid)?.member; // the owner and people added to it (not saved links)
 function applyTree(d) {
   Object.assign(S, d);
   const sh = d.shared || { projects: [], tracks: [], singles: [] };
@@ -148,6 +151,7 @@ try {
   const q = new URLSearchParams(location.search).get('next');
   if (q && /^\/s\/[0-9a-f]{32}$/.test(q)) sessionStorage.setItem('next', q);
 } catch {}
+document.addEventListener('visibilitychange', () => { if (!document.hidden && S.me?.needsDrive) load(); });
 const takeNext = () => { try { const n = sessionStorage.getItem('next'); sessionStorage.removeItem('next'); return n; } catch { return null; } };
 
 async function load() {
@@ -156,6 +160,7 @@ async function load() {
     applyTree(d); S.online = true;
     store.set('tree', d);
     if (d.me?.needsDrive) return driveStep();
+    $('#login')?.closest('dialog')?.close(); // e.g. Drive was just connected in Safari
     const next = takeNext();
     if (next) return location.replace(next);
     if (d.me && !d.me.isAdmin && !d.projects.length && !d.trash && !S.sharedProjects.length) firstProject(); // not for people who joined to listen to something shared
@@ -173,7 +178,7 @@ async function load() {
   const back = new URLSearchParams(location.search).get('drive');
   if (back) { history.replaceState(null, '', '/'); toast(back === 'connected' ? 'Google Drive connected' : back, { error: back !== 'connected', ms: 6000 }); }
   const deep = new URLSearchParams(location.search).get('track');
-  if (deep) { history.replaceState(null, '', '/'); if (trackOf(deep)) detailsDialog(trackOf(deep)); }
+  if (deep) { history.replaceState(null, '', '/'); if (trackOf(deep)) (canEdit(trackOf(deep).project_id) ? detailsDialog : commentsDialog)(trackOf(deep)); }
 }
 
 function showLogin() {
@@ -253,7 +258,7 @@ function driveStep(box, d) {
   fill(box, h('div', { className: 'stack' }, h('div', { className: 'brandmark' }, '[connect drive]'),
     h('p', { className: 'muted', style: { margin: 0 } }, 'Your music is stored in your own Google Drive, in a folder called [vault]. The app can only see files it puts there, nothing else in your Drive.'),
     h('a', { className: 'btn primary', href: '/api/drive/connect', style: { width: '100%', height: '42px', display: 'grid', placeItems: 'center' } }, 'Connect Google Drive'),
-    h('small', { className: 'muted' }, 'Google may warn that the app isn\'t verified. Tap Advanced → Go to [vault] to continue.'),
+    h('small', { className: 'muted' }, 'Google may warn that the app isn\'t verified. Tap Advanced → Go to [vault] to continue. In the iPhone app this opens Safari: come back here once it says connected.'),
     h('button', { type: 'button', className: 'linkish', onclick: logout }, 'Log out')));
 }
 // Profile pictures: a 256px square JPEG made here, kept with the account.
@@ -835,6 +840,7 @@ function projectMenu(p) {
       ed && { icon: 'gauge', label: 'Detect missing BPM & keys', run: () => detectTracks(tracks().filter(t => !t.bpm || !t.musical_key), false) },
       ed && { icon: 'download', label: 'Download as ZIP', run: () => zipTracks(tracks(), p.name, p.cover) },
       { icon: 'download', label: 'Save all offline', run: () => tracks().forEach(saveOffline) },
+      p.member && { icon: 'clock', label: 'Activity', run: () => activityDialog(p) },
       '-',
       { icon: 'close', label: 'Remove from my library', danger: true, async run() {
         if (!(await confirm(`Remove “${p.name}”?`, `It's ${p.owner}'s, so nothing is deleted. You just won't see it any more unless they share it again.`, 'Remove'))) return;
@@ -851,6 +857,7 @@ function projectMenu(p) {
     { icon: 'gauge', label: 'Detect missing BPM & keys', run: () => detectTracks(tracks().filter(t => !t.bpm || !t.musical_key), false) },
     { icon: 'download', label: 'Download as ZIP', run: () => zipTracks(tracks(), p.name, p.cover) },
     { icon: 'download', label: 'Save all offline', run: () => tracks().forEach(saveOffline) },
+    { icon: 'clock', label: 'Activity', run: () => activityDialog(p) },
     '-',
     { icon: 'trash', label: 'Move to trash', danger: true, async run() {
       const n = tracks().length;
@@ -1198,6 +1205,8 @@ async function walk(entry) {
   return (await Promise.all(kids.filter(k => !k.name.startsWith('.')).map(walk))).flat();
 }
 async function handleDrop(dt, projectId) {
+  const into = projectId || (S.view.type === 'project' ? S.view.id : null);
+  if (into && !canEdit(into)) return toast('You can listen to this project, not add to it', { error: true });
   const entries = [...dt.items].map(i => i.webkitGetAsEntry?.()).filter(Boolean);
   const loose = [], folders = [];
   for (const en of entries) en.isDirectory ? folders.push({ name: en.name, files: await walk(en) }) : loose.push(await fileOf(en));
@@ -1235,6 +1244,7 @@ function trackMenu(t, list) {
     '-',
     ed && { icon: 'sliders', label: 'Edit audio', run: () => openEditor(t) },
     ed && { icon: 'info', label: 'Details, notes & versions', run: () => detailsDialog(t) },
+    canComment(t.project_id) && { icon: 'comment', label: 'Comments', run: () => commentsDialog(t) },
     ed && { icon: 'gauge', label: 'Detect BPM & key', run: () => detectTracks([t], true) },
     own && { icon: 'share', label: 'Share', run: () => shareDialog('track', t.id, t.name) },
     isOffline(t) ? { icon: 'close', label: 'Remove download', run: () => removeOffline(t) } : { icon: 'download', label: 'Save offline', run: () => saveOffline(t) },
@@ -1248,6 +1258,43 @@ function trackMenu(t, list) {
       toast(`Moved “${t.name}” to the trash`, { ms: 7000, action: { label: 'Undo', run: () => restore('track', t.id) } });
     } },
   ]);
+}
+
+// Comments on a track, from share links and from people on the project. Writing one pins it to where you are in the track.
+async function commentsDialog(t) {
+  const list = h('div', { className: 'list comments' }, h('div', { className: 'muted' }, 'Loading…'));
+  const input = h('input', { type: 'text', maxLength: 1000, placeholder: 'Write a comment…', 'aria-label': 'Comment' });
+  const at = () => (cur?.id === t.id && audio.currentTime ? audio.currentTime : null);
+  async function draw() {
+    const rows = await api(`/tracks/${t.id}/comments`).catch(e => (oops(e), []));
+    fill(list, rows.length ? rows.slice().reverse().map(cm => h('div', { className: 'item comment' },
+      cm.at != null ? h('button', { type: 'button', className: 'ts num', title: 'Play from here', onclick: () => playFrom(t, cm.at) }, fmtTime(cm.at)) : h('span', { className: 'ts num' }, '—'),
+      h('span', { className: 'grow' }, h('b', {}, cm.name), ' ', cm.body, h('div', { className: 'mono', style: { color: 'var(--fg-3)', fontSize: '11px' } }, fmtDate(cm.created_at))),
+      (canEdit(t.project_id) || cm.user_id === S.me?.id) && h('button', { type: 'button', className: 'icon-btn sm', 'aria-label': 'Delete comment',
+        onclick: () => api(`/comments/${cm.id}`, { method: 'DELETE' }).then(draw, oops) }, icon('trash', 15))))
+      : h('div', { className: 'muted' }, 'No comments yet.'));
+    list.scrollTop = list.scrollHeight;
+  }
+  const d = dialog(h('form', { className: 'stack', async onsubmit(e) {
+    e.preventDefault();
+    if (!input.value.trim()) return;
+    try { await api(`/tracks/${t.id}/comments`, { method: 'POST', body: { body: input.value.trim(), at: at() } }); input.value = ''; draw(); } catch (x) { oops(x); }
+  } }, h('h2', {}, `Comments · ${t.name}`), list,
+  h('div', { className: 'people-add' }, input, h('button', { className: 'btn primary' }, 'Post')),
+  h('small', { className: 'people-note' }, cur?.id === t.id ? `Your comment is pinned to ${fmtTime(audio.currentTime)}.` : 'Play the track first to pin your comment to a moment in it.'),
+  h('div', { className: 'btns' }, h('button', { type: 'button', className: 'btn ghost', onclick: () => d.close() }, 'Done'))));
+  draw();
+}
+
+// Who changed what in a project (its owner and the people on it can see this).
+async function activityDialog(p) {
+  const list = h('div', { className: 'list' }, h('div', { className: 'muted' }, 'Loading…'));
+  const d = dialog(h('div', { className: 'stack' }, h('h2', {}, `Activity · ${p.name}`), list,
+    h('div', { className: 'btns' }, h('button', { className: 'btn primary', onclick: () => d.close() }, 'Done'))));
+  const rows = await api(`/projects/${p.id}/activity`).catch(e => (oops(e), []));
+  fill(list, rows.length ? rows.map(r => h('div', { className: 'item' }, avatarEl({ avatar: r.avatar, username: r.username || '?' }),
+    h('span', { className: 'grow' }, h('b', {}, r.username || 'Someone'), ' ', r.text, h('div', { className: 'mono', style: { color: 'var(--fg-3)', fontSize: '11px' } }, fmtDate(r.created_at)))))
+    : h('div', { className: 'muted' }, 'Nothing yet. Changes made by you and the people on this project show up here.'));
 }
 
 // Detects BPM & key for existing tracks. overwrite=false only fills in what's missing.
@@ -1406,7 +1453,7 @@ async function downloadTrack(t) {
     setTimeout(() => URL.revokeObjectURL(a.href), 60000);
   } catch (e) { oops(e); }
 }
-const extFromType = type => ({ 'audio/mpeg': '.mp3', 'audio/wav': '.wav', 'audio/flac': '.flac', 'audio/mp4': '.m4a', 'audio/aac': '.aac', 'audio/ogg': '.ogg', 'audio/aiff': '.aiff', 'audio/webm': '.weba' })[type] || '';
+const extFromType = type => (extForType(type) ? '.' + extForType(type) : '');
 
 // ---- offline ------------------------------------------------------------------------------
 // Downloaded tracks live in the Cache API, keyed by file version so edits don't serve stale audio.
@@ -1639,6 +1686,7 @@ async function storageProblem() {
   const r = await api('/storage-check').catch(() => null);
   if (!r || r.ok) return (lastWhy = '');
   if (r.code === 'drive') return (lastWhy = `Google Drive isn't letting [vault] read your files. ${r.message}`);
+  if (!S.me?.isAdmin) return (lastWhy = "Your files couldn't load right now. Try again in a bit.");
   const text = `${r.code} ${r.message}`.toLowerCase();
   const reset = new Date(); reset.setUTCHours(24, 0, 0, 0);
   lastWhy = /cap|exceed|limit/.test(text)
@@ -2212,6 +2260,11 @@ async function peopleDialog() {
         users.map(u => h('div', { className: 'set-row' }, h('span', { className: 'me-row' }, avatarEl(u, 'avatar lg'),
           h('span', {}, u.username + (u.disabled ? ' (off)' : ''), h('small', {}, u.is_admin ? `Admin · Backblaze · ${fmtBytes(u.used)}` : `${u.tracks} ${u.tracks === 1 ? 'track' : 'tracks'} · ${fmtBytes(u.used)} · ${u.drive ? 'Google Drive' : 'Drive not connected'}`))),
           !u.is_admin && h('span', { className: 'btns', style: { margin: 0 } },
+            h('button', { className: 'btn', async onclick() {
+              if (!(await confirm(`Reset ${u.username}'s password?`, 'You get a temporary password to send them. Their devices are logged out; they can change it in Settings → Account.', 'Reset'))) return;
+              const r = await api(`/admin/users/${u.id}/reset`, { method: 'POST' }).catch(oops);
+              if (r) prompt(`${u.username}'s temporary password`, r.password, { label: 'Send this to them', ok: 'Done' });
+            } }, 'Reset password'),
             h('button', { className: 'btn', async onclick() { await api(`/admin/users/${u.id}`, { method: 'PATCH', body: { disabled: !u.disabled } }).catch(oops); draw(); } }, u.disabled ? 'Turn on' : 'Turn off'),
             h('button', { className: 'btn danger', async onclick() {
               if (!(await confirm(`Delete ${u.username}?`, 'Their projects are deleted, along with the files [vault] made in their Google Drive. This can\'t be undone.', 'Delete'))) return;
@@ -2405,7 +2458,7 @@ function filterDialog() {
 }
 
 // ---- ZIP downloads and full backups ------------------------------------------------------------
-const extOf = t => (t.file_key || '').split('.').pop() || 'mp3';
+const extOf = (t, blob) => (/\.[a-z0-9]{2,5}$/i.test(t.file_key || '') ? t.file_key.split('.').pop() : extForType(blob?.type) || 'mp3');
 const trackMeta = t => ({ name: t.name, project: projectOf(t.project_id)?.name, producer: t.artist || undefined, bpm: t.bpm, key: t.musical_key, tags: t.tags || undefined, notes: t.notes || undefined, added: new Date(t.created_at).toISOString() });
 function saveBlob(blob, filename) {
   const a = h('a', { href: URL.createObjectURL(blob), download: filename });
@@ -2425,7 +2478,8 @@ async function zipTracks(list, name, cover) {
   try {
     for (const [i, t] of list.entries()) {
       note.textContent = `Preparing ZIP… ${i + 1} of ${list.length}`;
-      entries.push({ name: unique(`${String(i + 1).padStart(2, '0')} ${safeName(t.name)}.${extOf(t)}`), data: await audioBlob(t) });
+      const data = await audioBlob(t);
+      entries.push({ name: unique(`${String(i + 1).padStart(2, '0')} ${safeName(t.name)}.${extOf(t, data)}`), data });
     }
     if (cover) { const b = await coverBlob(cover).catch(() => null); if (b) entries.push({ name: 'cover.jpg', data: b }); }
     entries.push({ name: 'tracks.json', data: JSON.stringify(list.map(trackMeta), null, 2) });
@@ -2452,10 +2506,13 @@ async function backupAll() {
       const used = new Set();
       for (const [i, t] of tracks.entries()) {
         note.textContent = `Backing up ${++done} of ${total}…`;
-        let fname = `${String(i + 1).padStart(2, '0')} ${safeName(t.name)}.${extOf(t)}`;
-        while (used.has(fname.toLowerCase())) fname = fname.replace(/(\.[^.]+)$/, ' (2)$1');
-        used.add(fname.toLowerCase());
-        try { await write(dir, fname, await audioBlob(t)); } catch { failed++; }
+        try {
+          const data = await audioBlob(t);
+          let fname = `${String(i + 1).padStart(2, '0')} ${safeName(t.name)}.${extOf(t, data)}`;
+          while (used.has(fname.toLowerCase())) fname = fname.replace(/(\.[^.]+)$/, ' (2)$1');
+          used.add(fname.toLowerCase());
+          await write(dir, fname, data);
+        } catch { failed++; }
       }
       if (p.cover) { const b = await coverBlob(p.cover).catch(() => null); if (b) await write(dir, 'cover.jpg', b); }
       await write(dir, 'tracks.json', JSON.stringify(tracks.map(trackMeta), null, 2));
@@ -2531,7 +2588,7 @@ function shortcutsDialog() {
     h('div', { className: 'btns' }, h('button', { className: 'btn primary', onclick: () => d.close() }, 'Done'))), { className: 'settings-dlg' });
 }
 
-// ---- storage manager: what the 10 GB is made of, and the quickest ways to free some ----
+// ---- storage manager: what your storage is made of, and the quickest ways to free some ----
 async function storageDialog() {
   document.body.classList.remove('side-open');
   const body = h('div', { className: 'stack' }, h('div', { className: 'muted' }, 'Adding it up…'));
@@ -2547,14 +2604,16 @@ async function storageDialog() {
   try { const c = await caches.open('audio'); for (const k of await c.keys()) device += (await (await c.match(k)).blob()).size; } catch {}
   // current audio by format
   const fmt = {};
-  for (const t of S.tracks) { const x = (t.file_key.split('.').pop() || '?').toUpperCase(); fmt[x] = (fmt[x] || 0) + (t.size || 0); }
+  for (const t of S.tracks) { const x = /\.[a-z0-9]{2,5}$/i.test(t.file_key) ? t.file_key.split('.').pop().toUpperCase() : 'Audio'; fmt[x] = (fmt[x] || 0) + (t.size || 0); }
   const formats = Object.entries(fmt).sort((x, y) => y[1] - x[1]);
   const top = Math.max(1, ...s.projects.map(p => p.size)), topT = Math.max(1, ...s.tracks.map(t => t.size));
   const seg = (cls, v, label) => v > 0 && h('i', { className: 'seg-' + cls, style: { width: pc(v) + '%' }, title: `${label}: ${fmtBytes(v)}` });
   const line = (cls, label, v, sub, action) => h('div', { className: 'st-line' },
     h('span', { className: 'dot seg-' + cls }), h('div', { className: 't' }, label, sub && h('small', {}, sub)), h('span', { className: 'num st-v' }, fmtBytes(v)), action || h('span'));
   fill(body,
-    h('div', { className: 'st-total' }, h('b', { className: 'num' }, fmtBytes(used)), h('span', { className: 'muted' }, ` of ${fmtBytes(s.limit)} · ${fmtBytes(Math.max(0, s.limit - used))} free`)),
+    h('div', { className: 'st-total' }, h('b', { className: 'num' }, fmtBytes(used)), h('span', { className: 'muted' }, s.drive
+      ? ` in [vault] · ${fmtBytes(Math.max(0, s.limit - s.used))} free in your Google Drive` // Drive's space is shared with your other Drive files
+      : ` of ${fmtBytes(s.limit)} · ${fmtBytes(Math.max(0, s.limit - used))} free`)),
     h('div', { className: 'st-bar', role: 'img', 'aria-label': `${Math.round(pc(used))}% used` }, seg('cur', s.current, 'Your tracks'), seg('old', s.old, 'Old versions'), seg('trash', s.trash, 'Recently deleted')),
     h('div', { className: 'st-lines' },
       line('cur', 'Your tracks', s.current, formats.map(([x, v]) => `${x} ${fmtBytes(v)}`).join(' · ')),
@@ -2563,10 +2622,10 @@ async function storageDialog() {
         if (!(await confirm('Empty Recently deleted?', 'Everything in it is deleted for good.', 'Empty'))) return;
         await api('/trash/empty', { method: 'POST' }).catch(oops); toast(`Freed ${fmtBytes(s.trash)}`); await load(); draw();
       } }, 'Empty')),
-      line('dev', 'Kept on this device', keptBytes(), 'Played songs, so they don\'t download again; not counted in the 10 GB', keptBytes() > 0 && h('button', { className: 'btn', async onclick() {
+      line('dev', 'Kept on this device', keptBytes(), 'Played songs, so they don\'t download again; not counted in your storage', keptBytes() > 0 && h('button', { className: 'btn', async onclick() {
         await caches.delete(KEPT); store.set('played', {}); toast('Cleared. Songs will download again the next time they play.'); draw();
       } }, 'Clear')),
-      line('dev', 'Downloaded on this device', device, 'Offline copies; not counted in the 10 GB', device > 0 && h('button', { className: 'btn', async onclick() {
+      line('dev', 'Downloaded on this device', device, 'Offline copies; not counted in your storage', device > 0 && h('button', { className: 'btn', async onclick() {
         await caches.delete('audio'); S.offline.clear(); store.set('offline', []); render(); toast('Downloads removed from this device'); draw();
       } }, 'Remove'))),
     s.projects.length > 0 && h('div', { className: 'field' }, h('span', { className: 'field-l' }, 'Biggest projects'),

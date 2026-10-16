@@ -56,3 +56,5 @@ CREATE TABLE IF NOT EXISTS saved_shares (user_id TEXT NOT NULL, token TEXT NOT N
 CREATE TABLE IF NOT EXISTS project_members (project_id TEXT NOT NULL, user_id TEXT NOT NULL, role TEXT NOT NULL CHECK (role IN ('viewer', 'editor')), created_at INTEGER NOT NULL, PRIMARY KEY (project_id, user_id));
 CREATE INDEX IF NOT EXISTS members_user ON project_members (user_id);
 CREATE TABLE IF NOT EXISTS access_requests (id INTEGER PRIMARY KEY AUTOINCREMENT, share_token TEXT, name TEXT NOT NULL, contact TEXT, message TEXT, created_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS activity (id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL, user_id TEXT, text TEXT NOT NULL, created_at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS activity_project ON activity (project_id, created_at);

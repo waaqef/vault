@@ -29,7 +29,7 @@ Open http://localhost:8787. The password is whatever is in `.dev.vars` (create t
 
 ## Using it
 
-- **Upload:** tap Upload, or drag files onto the page. Dragging a folder makes it a project, and an image inside becomes the cover. Uploads with no project selected go to "Inbox".
+- **Upload:** tap Upload, or drag files onto the page. Dragging a folder makes it a project, and an image inside becomes the cover. Uploads with no project selected go to your newest project (new accounts make their first project when they sign up).
 - **Allowed files:**
   - Audio: mp3, wav, flac, m4a, aac, ogg, opus, aiff, weba
   - Cover art: jpg, jpeg, png, webp, heic
@@ -43,7 +43,8 @@ Open http://localhost:8787. The password is whatever is in `.dev.vars` (create t
   - **Waveform tools:** trim, cut, silence, fade in/out, normalize, reverse, mono, loop, undo
   - **Presets:** saved to your account, so they show up on every device
 - **Versions:** every Apply keeps the previous file. Switch back, preview or delete old ones under Details & versions. Old versions count toward your 10 GB.
-- **Share:** create a link from Share, with an optional password and expiry. Listeners enter their name, and the 🎧 count shows who played what. Turn a link off at any time.
+- **Share links:** create a link from Share, with an optional password, expiry and downloads on or off. People signed in to [vault] hear full songs, can comment and can save it to their library; everyone else hears 5-second previews unless you make the link **Public**. The 🎧 count shows who played what. Turn a link off or delete it at any time.
+- **People:** in Share, add [vault] users by username as **Can listen** or **Can edit**. It shows up in their library under [shared with me] and plays in their app, offline too. Editors can add, remove, reorder and edit tracks (their files go into your storage); only you can delete or share the project. Comments and **Activity** (⋯ menu) show what everyone did.
 - **Offline:** use ⋯ → Save offline, or Save all offline on a project. Saved tracks play with no connection.
 - **Record:** captures an idea from the microphone into the current project.
 
@@ -60,6 +61,10 @@ Nobody can see anyone else's projects; share links work the same as yours.
 2. Run `node setup.mjs google` and paste the client ID and secret.
 3. In [vault], **Settings → [account] → People → New invite code**, and send the code. They choose **Sign up** on the
    login screen, pick a username, password and picture, then tap **Connect Google Drive**.
+
+People without a code can tap **No invite code? Ask for one** (on sign-up, or on any share link); requests show up in
+People. People can delete their own account (Account → Delete account), and you can **Reset password** for anyone
+who forgets theirs.
 
 Keep `APP_PASSWORD` as it is once others have accounts: their passwords and Drive connections are tied to it.
 

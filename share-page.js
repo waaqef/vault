@@ -253,6 +253,8 @@ function show(d) {
     redraw();
   };
   a.onpause = () => { document.body.classList.add('paused'); clearInterval(timer); progress(false); };
+  // some .m4a files can't be previewed (their index is at the end); say so instead of failing silently
+  a.onerror = () => { if (!full && cur >= 0) { gate.querySelector('p').textContent = 'This song doesn’t have a preview. Sign in to [vault] to hear it.'; nudge(); } };
   a.onended = () => { if (!full) return nudge(); maxT = a.duration || maxT; progress(false); clearInterval(timer); if (cur + 1 < rows.length) play(cur + 1); };
   addEventListener('pagehide', () => progress(true));
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') progress(true); });

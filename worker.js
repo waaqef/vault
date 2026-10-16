@@ -1,5 +1,5 @@
 import { AwsClient } from 'aws4fetch';
-import { MAX, STORAGE_LIMIT, kindOf, ext, contentType, sniff } from './public/types.js';
+import { MAX, STORAGE_LIMIT, kindOf, ext, contentType, sniff, extForType } from './public/types.js';
 import { parseName } from './public/detect.js';
 import { sharePage } from './share-page.js';
 import { encryptPush, vapidHeader, makeVapidKeys } from './push.js';
@@ -168,6 +168,11 @@ const readArgs = u => [u.id, u.id, u.id, now()];
 const editProject = (env, u, id) => env.DB.prepare(`SELECT * FROM projects WHERE id = ? AND deleted_at IS NULL AND id IN ${EDITABLE}`).bind(id, ...editArgs(u)).first();
 const editTrack = (env, u, id) => env.DB.prepare(`SELECT t.*, p.owner_id FROM tracks t JOIN projects p ON p.id = t.project_id WHERE t.id = ? AND t.project_id IN ${EDITABLE}`).bind(id, ...editArgs(u)).first();
 const readTrack = (env, u, id) => env.DB.prepare(`SELECT t.*, p.owner_id FROM tracks t JOIN projects p ON p.id = t.project_id WHERE t.id = ? AND t.deleted_at IS NULL AND p.deleted_at IS NULL AND (t.project_id IN ${READABLE} OR t.id IN ${LINKED('track')})`).bind(id, ...readArgs(u), u.id, now()).first();
+// Owner or added person (viewer/editor): can read and write comments, and see the activity log.
+const MEMBER = `(SELECT id FROM projects WHERE owner_id = ? UNION SELECT project_id FROM project_members WHERE user_id = ?)`;
+const memberTrack = (env, u, id) => env.DB.prepare(`SELECT t.*, p.owner_id FROM tracks t JOIN projects p ON p.id = t.project_id WHERE t.id = ? AND t.deleted_at IS NULL AND t.project_id IN ${MEMBER}`).bind(id, u.id, u.id).first();
+// What happened in a project ("maya added “bounce v13”"), shown to the owner and the people on it. Kept 90 days.
+const logActivity = (env, projectId, u, text) => env.DB.prepare('INSERT INTO activity (project_id, user_id, text, created_at) VALUES (?, ?, ?, ?)').bind(projectId, u.id, text.slice(0, 300), now()).run().catch(() => {});
 // The account whose storage holds a project's files.
 const storeOf = (env, ownerId, u) => (ownerId === u.id ? u : getUser(env, ownerId));
 // Who owns a project / track (for deletes and share pages).
@@ -234,6 +239,7 @@ async function purgeOldTrash(env) {
   ]);
   for (const r of p.results) await deleteProject(env, r.id);
   for (const r of t.results) await deleteTrack(env, r.id);
+  await env.DB.prepare('DELETE FROM activity WHERE created_at < ?').bind(now() - 90 * DAY).run();
 }
 
 // Projects shared with this user (added as a viewer/editor, or saved from a link), and single saved tracks.
@@ -317,6 +323,8 @@ on('PATCH', '/api/projects/:id', async (req, env, b, { id }, url, ctx, u) => {
   const owner = await storeOf(env, old.owner_id, u);
   if (b.cover) await verify(env, b.cover, 'cover', owner);
   await update(env, 'projects', id, b, ['name', 'folder_id', 'cover']);
+  if (b.name && b.name !== old.name) await logActivity(env, id, u, `renamed the project to “${b.name}”`);
+  if ('cover' in b && b.cover !== old.cover) await logActivity(env, id, u, b.cover ? 'changed the cover' : 'removed the cover');
   if ('cover' in b && old.cover && old.cover !== b.cover) await remove(env, old.cover, owner);
   return json({ ok: true });
 });
@@ -370,7 +378,9 @@ on('POST', '/api/tracks', async (req, env, b, p, url, ctx, u) => {
   const proj = await editProject(env, u, b.project_id);
   if (!proj) return fail('Project not found', 404);
   const size = await verify(env, b.file_key, 'audio', await storeOf(env, proj.owner_id, u));
-  return json({ id: await createTrack(env, b, size) });
+  const id = await createTrack(env, b, size);
+  await logActivity(env, proj.id, u, `added “${(b.name || 'Untitled').slice(0, 120)}”`);
+  return json({ id });
 });
 const TRACK_FIELDS = ['name', 'project_id', 'bpm', 'musical_key', 'tags', 'cover', 'position', 'notes', 'artist', 'duration', 'peaks', 'mark'];
 on('PATCH', '/api/tracks/:id', async (req, env, b, { id }, url, ctx, u) => {
@@ -386,6 +396,8 @@ on('PATCH', '/api/tracks/:id', async (req, env, b, { id }, url, ctx, u) => {
   if ('mark' in b) b.mark = ['star', 'throw'].includes(b.mark) ? b.mark : null; // favourite / throwaway
   await update(env, 'tracks', id, b, TRACK_FIELDS);
   if ('cover' in b && old.cover && old.cover !== b.cover) await remove(env, old.cover, owner);
+  if (b.name && b.name !== old.name) await logActivity(env, old.project_id, u, `renamed “${old.name}” to “${b.name}”`);
+  else if (['notes', 'bpm', 'musical_key', 'tags', 'artist'].some(k => k in b && (b[k] ?? '') != (old[k] ?? ''))) await logActivity(env, old.project_id, u, `edited the details of “${old.name}”`);
   return json({ ok: true });
 });
 on('POST', '/api/tracks/reorder', async (req, env, b, p, url, ctx, u) => {
@@ -411,7 +423,10 @@ on('POST', '/api/tracks/bulk', async (req, env, b, p, url, ctx, u) => {
   return json({ ok: true });
 });
 on('DELETE', '/api/tracks/:id', async (req, env, b, { id }, url, ctx, u) => {
-  await env.DB.prepare(`UPDATE tracks SET deleted_at = ? WHERE id = ? AND project_id IN ${EDITABLE}`).bind(now(), id, ...editArgs(u)).run(); // goes to the owner's trash
+  const t = await editTrack(env, u, id);
+  if (!t) return json({ ok: true });
+  await env.DB.prepare('UPDATE tracks SET deleted_at = ? WHERE id = ?').bind(now(), id).run(); // goes to the owner's trash
+  await logActivity(env, t.project_id, u, `moved “${t.name}” to the trash`);
   return json({ ok: true });
 });
 
@@ -452,6 +467,7 @@ on('POST', '/api/tracks/:id/versions', async (req, env, b, { id }, url, ctx, u) 
   const t = await editTrack(env, u, id);
   if (!t) return fail('Not found', 404);
   const size = await verify(env, b.file_key, 'audio', await storeOf(env, t.owner_id, u));
+  await logActivity(env, t.project_id, u, `saved a new version of “${t.name}”${b.note ? `: ${String(b.note).slice(0, 80)}` : ''}`);
   await env.DB.batch([
     env.DB.prepare('INSERT INTO track_versions (id, track_id, file_key, size, duration, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
       .bind(uid(), id, b.file_key, size, b.duration || null, (b.note || 'Edit').slice(0, 300), now()),
@@ -512,11 +528,24 @@ on('GET', '/api/storage', async (req, env, b, p, url, ctx, u) => {
 
 // Comments listeners left on share links
 on('GET', '/api/tracks/:id/comments', async (req, env, b, { id }, url, ctx, u) => {
-  if (!(await editTrack(env, u, id))) return fail('Not found', 404);
+  if (!(await memberTrack(env, u, id))) return fail('Not found', 404);
   return json((await env.DB.prepare('SELECT id, name, at, body, created_at FROM comments WHERE track_id = ? ORDER BY created_at DESC LIMIT 500').bind(id).all()).results);
 });
+on('POST', '/api/tracks/:id/comments', async (req, env, b, { id }, url, ctx, u) => {
+  const t = await memberTrack(env, u, id);
+  if (!t) return fail('Not found', 404);
+  const body = String(b.body || '').trim().slice(0, 1000);
+  if (!body) return fail('Write something first');
+  const at = b.at == null || !isFinite(b.at) ? null : Math.max(0, Number(b.at));
+  const c = { id: uid(), name: u.username, at, body, created_at: now(), user_id: u.id };
+  await env.DB.prepare("INSERT INTO comments (id, share_token, track_id, name, at, body, user_id, created_at) VALUES (?, '', ?, ?, ?, ?, ?, ?)").bind(c.id, id, c.name, at, body, u.id, c.created_at).run();
+  await logActivity(env, t.project_id, u, `commented on “${t.name}”`);
+  commentNotify(ctx, env, url, t, t.owner_id, u.id, c, () => '/?track=' + t.id);
+  return json(c);
+});
 on('DELETE', '/api/comments/:id', async (req, env, b, { id }, url, ctx, u) => {
-  await env.DB.prepare(`DELETE FROM comments WHERE id = ? AND track_id IN (SELECT id FROM tracks WHERE project_id IN ${EDITABLE})`).bind(id, ...editArgs(u)).run();
+  // editors and the owner can delete any comment on their tracks; anyone can delete their own
+  await env.DB.prepare(`DELETE FROM comments WHERE id = ? AND (user_id = ? OR track_id IN (SELECT id FROM tracks WHERE project_id IN ${EDITABLE}))`).bind(id, u.id, ...editArgs(u)).run();
   return json({ ok: true });
 });
 
@@ -670,13 +699,20 @@ on('POST', '/api/projects/:id/members', async (req, env, b, { id }, url, ctx, u)
   if (who.id === u.id) return fail("That's you.");
   const had = await env.DB.prepare('SELECT 1 FROM project_members WHERE project_id = ? AND user_id = ?').bind(id, who.id).first();
   await env.DB.prepare('INSERT INTO project_members (project_id, user_id, role, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(project_id, user_id) DO UPDATE SET role = excluded.role').bind(id, who.id, role, now()).run();
+  if (!had) await logActivity(env, id, u, `added ${who.username} (${role === 'editor' ? 'can edit' : 'can listen'})`);
   if (!had) notify(ctx, env, who.id, { title: `${u.username} shared “${p.name}” with you`, body: role === 'editor' ? 'You can listen and edit it.' : 'You can listen to it.', tag: 'member-' + id, url: '/' }, url.origin);
   return json({ ok: true });
 });
 on('DELETE', '/api/projects/:id/members/:uid', async (req, env, b, { id, uid: who }, url, ctx, u) => {
   if (who !== u.id && !(await ownProject(env, u, id))) return fail('Not found', 404); // the owner removes anyone; people can remove themselves
   await env.DB.prepare('DELETE FROM project_members WHERE project_id = ? AND user_id = ?').bind(id, who).run();
+  const gone = await getUser(env, who);
+  if (gone) await logActivity(env, id, u, who === u.id ? 'left the project' : `removed ${gone.username}`);
   return json({ ok: true });
+});
+on('GET', '/api/projects/:id/activity', async (req, env, b, { id }, url, ctx, u) => {
+  if (!(await env.DB.prepare(`SELECT 1 FROM projects WHERE id = ? AND id IN ${MEMBER}`).bind(id, u.id, u.id).first())) return fail('Not found', 404);
+  return json((await env.DB.prepare('SELECT a.text, a.created_at, x.username, x.avatar FROM activity a LEFT JOIN users x ON x.id = a.user_id WHERE a.project_id = ? ORDER BY a.created_at DESC LIMIT 80').bind(id).all()).results);
 });
 // Remove a shared project (or a single saved track) from my library: leaves it and forgets saved links to it.
 on('POST', '/api/shared/leave', async (req, env, b, p, url, ctx, u) => {
@@ -747,25 +783,37 @@ on('DELETE', '/api/upload-key', async (req, env, b, p, url, ctx, u) => {
 const driveRedirect = url => `${url.origin}/api/drive/callback`;
 on('GET', '/api/drive/connect', async (req, env, b, p, url, ctx, u) => {
   if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET) return fail("Google Drive isn't set up on this server yet. Ask the admin.", 503);
-  const state = `${u.id}.${await hmac(env.APP_PASSWORD, 'drive-state:' + u.id)}`;
+  const exp = now() + 15 * 60e3; // the sign-in has to finish within 15 minutes
+  const state = `${u.id}.${exp}.${await hmac(env.APP_PASSWORD, `drive-state:${u.id}:${exp}`)}`;
   return Response.redirect(drive.authUrl(env.GOOGLE_CLIENT_ID, driveRedirect(url), state), 302);
 });
 // Google sends you back here after you allow access.
+// The account comes from the signed state, not the login cookie, so this also works when the iPhone app hands Google's
+// sign-in to Safari (where you aren't logged in): Safari then just says to go back to the app.
 async function driveCallback(req, env, url) {
-  const back = msg => Response.redirect(`${url.origin}/?drive=${encodeURIComponent(msg)}`, 302);
-  const u = await userFromCookie(req, env);
-  const state = url.searchParams.get('state') || '', code = url.searchParams.get('code');
-  if (!u || !same(state, `${u.id}.${await hmac(env.APP_PASSWORD, 'drive-state:' + u.id)}`)) return back('That sign-in link expired. Try again.');
+  const [id = '', exp = '', sig = ''] = (url.searchParams.get('state') || '').split('.');
+  const u = Number(exp) > now() && same(sig, await hmac(env.APP_PASSWORD, `drive-state:${id}:${exp}`)) ? await getUser(env, id) : null;
+  const inApp = u && (await userFromCookie(req, env))?.id === u.id;
+  const back = msg => inApp ? Response.redirect(`${url.origin}/?drive=${encodeURIComponent(msg)}`, 302)
+    : new Response(drivePage(msg), { headers: { 'content-type': 'text/html; charset=utf-8' } });
+  const code = url.searchParams.get('code');
+  if (!u) return back('That sign-in link expired. Try again.');
   if (!code) return back(url.searchParams.get('error') === 'access_denied' ? 'Google Drive wasn\'t connected.' : 'Google didn\'t finish. Try again.');
   try {
     const t = await drive.exchangeCode(env, code, driveRedirect(url));
     const sealed = await drive.seal(env.APP_PASSWORD, t.refresh_token);
     await env.DB.prepare("UPDATE users SET drive_refresh = ?, storage = 'drive' WHERE id = ?").bind(sealed, u.id).run();
+    drive.forget(u.id); // drop any access token from a previously connected Google account
     const fresh = await getUser(env, u.id);
-    if (!fresh.drive_folder) await env.DB.prepare('UPDATE users SET drive_folder = ? WHERE id = ?').bind(await drive.makeFolder(env, fresh), u.id).run();
+    // A different Google account can't see the old [vault] folder, so make one in this account.
+    if (!fresh.drive_folder || !(await drive.folderOk(env, fresh, fresh.drive_folder)))
+      await env.DB.prepare('UPDATE users SET drive_folder = ? WHERE id = ?').bind(await drive.makeFolder(env, fresh), u.id).run();
     return back('connected');
   } catch (e) { return back(e.message || 'Couldn\'t connect Google Drive.'); }
 }
+const drivePage = msg => `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>[vault]</title>
+<body style="margin:0;min-height:100vh;display:grid;place-items:center;background:#191919;color:#fff;font:16px/1.5 system-ui,sans-serif;text-align:center;padding:24px">
+<div><div style="font-weight:600;font-size:22px;margin-bottom:10px">[vault]</div><p>${msg === 'connected' ? 'Google Drive is connected. Go back to the [vault] app.' : String(msg).replace(/[<>&"]/g, '')}</p></div>`;
 on('POST', '/api/drive/disconnect', async (req, env, b, p, url, ctx, u) => {
   if (u.id === OWNER) return fail('The admin account uses Backblaze.');
   await env.DB.prepare('UPDATE users SET drive_refresh = NULL WHERE id = ?').bind(u.id).run();
@@ -802,6 +850,16 @@ on('GET', '/api/admin/users', async (req, env, b, p, url, ctx, u) => {
       (SELECT COALESCE(SUM(v.size), 0) FROM track_versions v JOIN tracks t ON t.id = v.track_id JOIN projects p ON p.id = t.project_id WHERE p.owner_id = x.id) AS used
     FROM users x ORDER BY x.is_admin DESC, x.created_at`).all();
   return json(results);
+});
+// Forgot their password: the admin makes a temporary one (shown once) and their devices are logged out.
+on('POST', '/api/admin/users/:id/reset', async (req, env, b, { id }, url, ctx, u) => {
+  if (adminOnly(u)) return adminOnly(u);
+  if (id === OWNER) return fail("Change the admin password in Settings → Account.");
+  const abc = 'abcdefghjkmnpqrstuvwxyz23456789', bytes = crypto.getRandomValues(new Uint8Array(10));
+  const password = [...bytes].map(x => abc[x % abc.length]).join('');
+  const salt = uid();
+  const r = await env.DB.prepare('UPDATE users SET pass_salt = ?, pass_hash = ?, session = ? WHERE id = ?').bind(salt, await passHash(env, salt, password), uid(), id).run();
+  return r.meta.changes ? json({ password }) : fail('Not found', 404);
 });
 on('PATCH', '/api/admin/users/:id', async (req, env, b, { id }, url, ctx, u) => {
   if (adminOnly(u)) return adminOnly(u);
@@ -844,10 +902,10 @@ on('POST', '/api/me/delete', async (req, env, b, p, url, ctx, u) => {
 
 // ---- sign in / sign up (no login needed) ----
 async function login(req, env) {
-  const lockKey = 'login:' + clientIp(req), wait = await lockedFor(env, lockKey);
-  if (wait) return fail(lockMessage(wait), 429);
   const { username = '', password = '' } = await req.json().catch(() => ({}));
   const name = String(username).trim().toLowerCase();
+  const lockKey = `login:${clientIp(req)}:${name}`, wait = await lockedFor(env, lockKey);
+  if (wait) return fail(lockMessage(wait), 429);
   let user = null;
   const admin = await getUser(env, OWNER);
   // No username (or the admin's username): the admin password signs you in as the admin.
@@ -960,6 +1018,16 @@ async function sendPush(env, ownerId, payload, origin) {
     } catch { return 0; }
   }));
 }
+// A new comment: tell the owner, everyone who has commented on the track, and the people on the project (not the author).
+async function commentNotify(ctx, env, url, t, ownerId, authorId, c, linkFor) {
+  const [others, members] = await env.DB.batch([
+    env.DB.prepare('SELECT DISTINCT user_id FROM comments WHERE track_id = ? AND user_id IS NOT NULL').bind(t.id),
+    env.DB.prepare('SELECT user_id FROM project_members WHERE project_id = ?').bind(t.project_id),
+  ]);
+  const msg = { title: `${c.name} commented${c.at == null ? '' : ' at ' + fmtAt(c.at)}`, body: `${t.name}: ${c.body}`.slice(0, 300), tag: 'comment-' + c.id };
+  for (const id of new Set([ownerId, ...others.results.map(r => r.user_id), ...members.results.map(r => r.user_id)]))
+    if (id !== authorId) notify(ctx, env, id, { ...msg, url: linkFor(id) }, url.origin);
+}
 const notify = (ctx, env, ownerId, payload, origin) => ctx?.waitUntil?.(sendPush(env, ownerId, payload, origin).catch(() => {}));
 
 // ---- public share pages -----------------------------------------------------
@@ -986,13 +1054,29 @@ async function shareAllowed(req, env, s) {
 // its ID3 tag (if any) plus ~3 s more audio than the preview, sized from the file's bitrate.
 // ponytail: byte-based cut; files whose index sits at the end (some .m4a) won't preview, cut audio server-side if that matters
 const PREVIEW_SECS = 5;
+// Where an MP4/M4A file's index box ends, if it comes before the audio; 0 if not (no preview possible).
+async function mp4Head(part, size) {
+  for (let off = 0, i = 0; i < 12 && off + 8 <= size; i++) {
+    const r = await part(`bytes=${off}-${off + 7}`);
+    if (!r.ok) return 0;
+    const x = new Uint8Array(await r.arrayBuffer()), len = x[0] * 2 ** 24 + (x[1] << 16) + (x[2] << 8) + x[3], type = String.fromCharCode(...x.slice(4, 8));
+    if (type === 'moov') return off + len;
+    if (type === 'mdat' || len < 8) return 0;
+    off += len;
+  }
+  return 0;
+}
 async function previewFile(env, req, t, owner) {
   const part = range => getObject(env, new Request('http://x/', { headers: { range } }), t.file_key, owner);
   let head = 0;
-  const r0 = await part('bytes=0-9');
+  const r0 = await part('bytes=0-15');
   if (r0.ok) {
-    const b = new Uint8Array(await r0.arrayBuffer());
-    if (b[0] === 0x49 && b[1] === 0x44 && b[2] === 0x33) head = 10 + ((b[6] & 127) << 21 | (b[7] & 127) << 14 | (b[8] & 127) << 7 | (b[9] & 127));
+    const b = new Uint8Array(await r0.arrayBuffer()), tag = (o, n) => String.fromCharCode(...b.slice(o, o + n));
+    if (tag(0, 3) === 'ID3') head = 10 + ((b[6] & 127) << 21 | (b[7] & 127) << 14 | (b[8] & 127) << 7 | (b[9] & 127));
+    else if (tag(4, 4) === 'ftyp') { // .m4a: it only plays from the start if its index (moov) comes before the audio (mdat)
+      head = await mp4Head(part, t.size);
+      if (!head) return new Response('No preview for this file', { status: 415 });
+    }
   }
   const perSec = t.duration ? t.size / t.duration : 40000;
   const size = Math.min(t.size, head + Math.ceil(perSec * (PREVIEW_SECS + 3)) + 4096);
@@ -1083,7 +1167,8 @@ async function handleShare(req, env, url, ctx) {
     if (action === 'download') {
       if (!s.allow_download) return fail('Downloads are turned off for this link', 403);
       if (!viewer && !s.public) return fail('Sign in to download', 401);
-      return json({ url: `/s/${token}/audio/${t.id}`, filename: `${t.name}.${drive.isDriveKey(t.file_key) ? 'mp3' : ext(t.file_key)}` });
+      const type = drive.isDriveKey(t.file_key) ? extForType((await drive.fileInfo(env, await owner(), t.file_key).catch(() => null))?.mimeType) || 'mp3' : ext(t.file_key);
+      return json({ url: `/s/${token}/audio/${t.id}`, filename: `${t.name}.${type}` });
     }
     return viewer || s.public ? streamFile(env, req, t.file_key, await owner(), 'private') : previewFile(env, req, t, await owner());
   }
@@ -1098,8 +1183,9 @@ async function handleShare(req, env, url, ctx) {
     const t = tracks.find(t => t.id === b.track_id);
     if (!t) return fail('Not found', 404);
     const who = viewer ? viewer.username : String(b.name || '').trim().slice(0, 80) || 'Anonymous';
-    // One notification per listener per half hour, not one per track.
-    const recent = await env.DB.prepare('SELECT 1 FROM listens WHERE share_token = ? AND listener_name = ? AND at > ? LIMIT 1').bind(token, who, now() - 30 * 60e3).first();
+    // One notification per listener per half hour, not one per track (nameless listeners on public links: one a day).
+    const quiet = viewer || String(b.name || '').trim() ? 30 * 60e3 : DAY;
+    const recent = await env.DB.prepare('SELECT 1 FROM listens WHERE share_token = ? AND listener_name = ? AND at > ? LIMIT 1').bind(token, who, now() - quiet).first();
     const r = await env.DB.prepare('INSERT INTO listens (share_token, listener_name, track_id, at, seconds, duration) VALUES (?, ?, ?, ?, 0, ?) RETURNING id')
       .bind(token, who, t.id, now(), Number(b.duration) || null).first();
     if (!recent) notify(ctx, env, s.owner_id, { title: `${who} is listening`, body: t.name, tag: 'listen-' + token, url: '/' }, url.origin);
@@ -1125,11 +1211,9 @@ async function handleShare(req, env, url, ctx) {
     const c = { id: uid(), name: who, at, body, created_at: now() };
     await env.DB.prepare('INSERT INTO comments (id, share_token, track_id, name, at, body, user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
       .bind(c.id, token, t.id, who, at, body, viewer?.id || null, c.created_at).run();
-    // Tell the owner, and everyone else who has commented on this track, so it becomes a conversation.
-    const msg = { title: `${who} commented${at == null ? '' : ' at ' + fmtAt(at)}`, body: `${t.name}: ${body}`.slice(0, 300), tag: 'comment-' + c.id };
-    const { results: others } = await env.DB.prepare('SELECT DISTINCT user_id FROM comments WHERE track_id = ? AND user_id IS NOT NULL').bind(t.id).all();
-    for (const id of new Set([s.owner_id, ...others.map(r => r.user_id)]))
-      if (id !== viewer?.id) notify(ctx, env, id, { ...msg, url: id === s.owner_id ? '/?track=' + t.id : `/s/${token}` }, url.origin);
+    // Tell the owner, everyone else who has commented on this track and the project's people, so it becomes a conversation.
+    const track = await env.DB.prepare('SELECT id, name, project_id FROM tracks WHERE id = ?').bind(t.id).first();
+    await commentNotify(ctx, env, url, track, s.owner_id, viewer?.id, c, id => (id === s.owner_id ? '/?track=' + t.id : `/s/${token}`));
     return json(c);
   }
   // how far into the track they got (sent while playing and when they leave)

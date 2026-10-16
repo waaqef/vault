@@ -56,6 +56,7 @@ export async function accessToken(env, user) {
   tokens.set(user.id, { token: d.access_token, exp: Date.now() + d.expires_in * 1000 });
   return d.access_token;
 }
+export const forget = id => tokens.delete(id);
 const authed = async (env, user, extra = {}) => ({ authorization: `Bearer ${await accessToken(env, user)}`, ...extra });
 
 // ---- files ----
@@ -80,6 +81,11 @@ export async function fetchFile(env, user, key, range) {
 export async function fileInfo(env, user, key) {
   const r = await fetch(`${API}/files/${driveId(key)}?fields=size,mimeType`, { headers: await authed(env, user) });
   return r.ok ? r.json() : null;
+}
+// Is this folder still there (and visible to the connected Google account)?
+export async function folderOk(env, user, id) {
+  const r = await fetch(`${API}/files/${id}?fields=id,trashed`, { headers: await authed(env, user) });
+  return r.ok && !(await r.json()).trashed;
 }
 export async function deleteFile(env, user, key) {
   const r = await fetch(`${API}/files/${driveId(key)}`, { method: 'DELETE', headers: await authed(env, user) });

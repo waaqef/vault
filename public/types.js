@@ -37,3 +37,6 @@ export function sniff(b) {
   if (b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3) return 'audio'; // webm (recordings)
   return null;
 }
+
+// The file extension for a content type (for naming downloads of files whose key has none, like Google Drive's).
+export const extForType = type => Object.keys(AUDIO).find(e => AUDIO[e] === String(type || '').split(';')[0]) || ({ 'audio/x-wav': 'wav', 'audio/x-flac': 'flac', 'audio/x-m4a': 'm4a', 'audio/mp3': 'mp3', 'audio/x-aiff': 'aiff' })[String(type || '').split(';')[0]] || '';
