@@ -1311,7 +1311,7 @@ async function analyse(blob, name, detect = true) {
 // Tracks without a waveform (older uploads, the iPhone Shortcut, switched versions) get one the first time they play.
 const peaking = new Set();
 async function fillPeaks(t) {
-  if (t.peaks || peaking.has(t.id) || !S.online || t.size > 300e6) return;
+  if (t.peaks || peaking.has(t.id) || !S.online || t.size > 300e6 || !canEdit(t.project_id)) return; // listen-only: don't write to someone else's track
   peaking.add(t.id);
   try {
     const { peaks } = await analyse(await audioBlob(t), t.name, false);
@@ -1332,6 +1332,7 @@ async function makeWaveforms() {
 }
 
 async function detectTracks(list, overwrite) {
+  list = list.filter(t => canEdit(t.project_id));
   if (!list.length) return toast('Every track here already has a BPM and key');
   const note = toast('', { ms: 0 });
   let changed = 0;
@@ -1353,6 +1354,7 @@ async function detectTracks(list, overwrite) {
 }
 
 async function detailsDialog(t) {
+  if (!canEdit(t.project_id)) return toast('This project is listen-only for you', { quiet: true });
   const name = h('input', { type: 'text', value: t.name, required: true });
   const artist = h('input', { type: 'text', value: t.artist || '', placeholder: settings.artist || 'e.g. ssixr', maxLength: 120 });
   const bpm = h('input', { type: 'number', min: 20, max: 400, step: 0.1, value: t.bpm ?? '', placeholder: '—' });
@@ -1727,14 +1729,14 @@ function renderPlayer() {
       onclick: openFullPlayer, onkeydown(e) { if (e.key === 'Enter') openFullPlayer(); } }, thumb(coverOf(t)),
       h('div', { style: { minWidth: 0 } }, h('div', { className: 't' }, t.name), h('div', { className: 'p' }, [t.artist, projectOf(t.project_id)?.name].filter(Boolean).join(' · ')))),
     h('div', { className: 'transport' },
-      starBtn(t), throwBtn(t, 'hide-sm'),
+      canEdit(t.project_id) && [starBtn(t), throwBtn(t, 'hide-sm')],
       shuffleBtn('hide-sm'),
       h('button', { className: 'icon-btn hide-sm', 'aria-label': 'Previous', onclick: playPrev }, icon('prev', 18)),
       playBtn,
       h('button', { className: 'icon-btn', 'aria-label': 'Next', onclick: skip }, icon('next', 18)),
       repeatBtn('hide-sm'),
       h('button', { className: 'icon-btn', 'aria-label': 'Up next', title: 'Up next', onclick: queueDialog }, icon('queue', 18)),
-      h('button', { className: 'icon-btn', 'aria-label': 'Edit audio', title: 'Edit audio', onclick: () => openEditor(t) }, icon('sliders', 18))),
+      canEdit(t.project_id) && h('button', { className: 'icon-btn', 'aria-label': 'Edit audio', title: 'Edit audio', onclick: () => openEditor(t) }, icon('sliders', 18))),
     h('div', { className: 'seek' }, t1, seek, t2),
   );
   marquees(el);
@@ -1799,7 +1801,7 @@ function drawFullPlayer() {
     h('div', { className: 'fp-art' + (art ? '' : ' disc') + (playing ? ' playing' : ''), style: bg(art) }),
     h('div', { className: 'fp-info' },
       h('div', { className: 'fp-titles' }, title, h('div', { className: 'fp-a' }, [t.artist, t.musical_key, t.bpm && Math.round(t.bpm) + ' bpm'].filter(Boolean).join(' · ') || '\u00a0')),
-      starBtn(t), throwBtn(t)),
+      canEdit(t.project_id) && [starBtn(t), throwBtn(t)]),
     scrub,
     h('div', { className: 'fp-times num' }, fp.t1, fp.t2),
     h('div', { className: 'fp-transport' },
@@ -1810,9 +1812,10 @@ function drawFullPlayer() {
       repeatBtn('')),
     h('div', { className: 'fp-bottom' },
       h('button', { className: 'icon-btn', 'aria-label': 'Up next', title: 'Up next', onclick: queueDialog }, icon('queue', 20)),
-      h('button', { className: 'icon-btn', 'aria-label': 'Details', title: 'Details', onclick: () => detailsDialog(trackOf(t.id) || t) }, icon('info', 20)),
-      h('button', { className: 'icon-btn', 'aria-label': 'Share', title: 'Share', onclick: () => shareDialog('track', t.id, t.name) }, icon('share', 20)),
-      h('button', { className: 'icon-btn', 'aria-label': 'Edit audio', title: 'Edit audio', onclick: () => { fp.d.close(); openEditor(t); } }, icon('sliders', 20))));
+      canEdit(t.project_id) && h('button', { className: 'icon-btn', 'aria-label': 'Details', title: 'Details', onclick: () => detailsDialog(trackOf(t.id) || t) }, icon('info', 20)),
+      !canEdit(t.project_id) && canComment(t.project_id) && h('button', { className: 'icon-btn', 'aria-label': 'Comments', title: 'Comments', onclick: () => commentsDialog(t) }, icon('comment', 20)),
+      !isShared(t.project_id) && h('button', { className: 'icon-btn', 'aria-label': 'Share', title: 'Share', onclick: () => shareDialog('track', t.id, t.name) }, icon('share', 20)),
+      canEdit(t.project_id) && h('button', { className: 'icon-btn', 'aria-label': 'Edit audio', title: 'Edit audio', onclick: () => { fp.d.close(); openEditor(t); } }, icon('sliders', 20))));
   if (phone.matches && settings.motion) marquee(title);
   if (changed && old) {
     const ghost = old.cloneNode(true);
@@ -1886,6 +1889,7 @@ function queueDialog() {
 
 // ---- editor ---------------------------------------------------------------------------------
 async function openEditor(t) {
+  if (!canEdit(t.project_id)) return toast('This project is listen-only for you', { quiet: true });
   if (!S.online) return toast('Editing needs a connection', { error: true });
   // The editor opens at the same spot the player was at (and keeps playing if it was), and hands it back on close.
   const same = cur?.id === t.id, startAt = same ? audio.currentTime : 0, autoplay = same && !audio.paused;
