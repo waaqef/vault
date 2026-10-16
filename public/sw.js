@@ -1,5 +1,5 @@
 // Keeps the app itself available offline. Downloaded audio is stored separately by app.js (Cache "audio").
-const V = 'shell-v82';
+const V = 'shell-__VERSION__'; // filled in by the server with the deploy's id
 const SHELL = ['/', '/style.css', '/app.js', '/editor.js', '/types.js', '/wav.js', '/lib/soundtouch.js', '/icons.js', '/settings.js', '/detect.js', '/zip.js', '/wave.js', '/fonts/inter.woff2', '/fonts/plex-mono.woff2', '/manifest.json', '/icon.svg', '/icon-192.png'];
 
 self.addEventListener('install', e => e.waitUntil(caches.open(V).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())));

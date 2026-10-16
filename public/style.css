@@ -1279,3 +1279,27 @@ a.nav { text-decoration: none; color: inherit; }
 label small.people-note, .people-note { display: block; color: var(--fg-3); font-size: 12px; font-weight: 400; line-height: 1.45; margin-top: 4px; }
 /* toasts as a popover (top layer): undo the browser's popover box styling, keep our position */
 #toasts[popover] { right: auto; top: auto; margin: 0; padding: 0; border: 0; background: none; overflow: visible; color: inherit; height: auto; }
+
+/* ---- phones: pop-ups are compact floating cards, not full-screen panels ----
+   A little gap all round, rounded on every corner, tighter padding and type, and menus cap their height and scroll. */
+@media (max-width: 760px) {
+  dialog:not(.editor):not(.fsplayer) { width: calc(100vw - 20px); max-width: 460px; padding: 18px 16px; border-radius: 20px; max-height: calc(100dvh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); }
+  dialog:not(.editor):not(.fsplayer) h2 { font-size: 18px; margin-bottom: 12px; }
+  dialog form, .stack { gap: 11px; }
+  dialog.sheet:not(.editor):not(.fsplayer) { width: calc(100vw - 20px); max-width: 400px; margin: auto auto calc(10px + env(safe-area-inset-bottom)); padding: 5px; border-radius: 20px; max-height: 64dvh; overflow-y: auto; }
+  .sheet button { padding: 9px 12px; font-size: 15px; gap: 11px; min-height: 0; }
+  .sheet hr, .sheet .sep { margin: 3px 10px; }
+  dialog.settings-dlg:not(.editor):not(.fsplayer) { width: calc(100vw - 20px); max-width: 520px; margin: auto auto calc(10px + env(safe-area-inset-bottom)); max-height: 82dvh; border-radius: 20px; padding: 18px 14px 14px; }
+  .set-row { min-height: 44px; padding: 8px 10px 8px 12px; gap: 10px; font-size: 14px; }
+  .set-row small { font-size: 12px; }
+  .set-sec { gap: 5px; }
+  .btns { margin-top: 2px; }
+  .item { min-height: 38px; }
+}
+/* inbox bell */
+.brand .bell { position: relative; margin-left: auto; color: var(--fg-2); }
+.brand .bell + .me { margin-left: 6px; }
+.bell-n { position: absolute; top: -2px; right: -3px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--danger); color: #fff; font-size: 10px; line-height: 16px; text-align: center; }
+.inbox-item { width: 100%; text-align: left; border: 0; color: var(--fg); cursor: pointer; align-items: flex-start; padding: 10px 12px; }
+.inbox-item.unread { box-shadow: inset 3px 0 0 var(--fg); }
+.inbox-item .muted { font-size: 13px; margin-top: 2px; }

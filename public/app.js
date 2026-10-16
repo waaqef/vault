@@ -324,6 +324,8 @@ function renderSide() {
     ic && h('span', { className: 'nav-ic' }, icon(ic, 16)), h('span', { className: 'label' }, label), h('span', { className: 'count' }, n));
   fill(side,
     h('div', { className: 'brand' }, h('button', { className: 'brand-home', 'aria-label': 'Home', title: 'Home', onclick: () => setView({ type: 'home' }) }, '[vault]'), !S.online && h('span', { className: 'mono' }, '[offline]'),
+      S.me && h('button', { className: 'icon-btn sm bell', 'aria-label': S.unread ? `Inbox, ${S.unread} new` : 'Inbox', title: 'Inbox', onclick: inboxDialog },
+        icon('bell', 17), S.unread > 0 && h('span', { className: 'bell-n num' }, S.unread > 9 ? '9+' : S.unread)),
       S.me && h('button', { className: 'me', title: `Signed in as ${S.me.username}`, 'aria-label': `Account: ${S.me.username}`, onclick: () => settingsDialog('account') }, avatarEl(S.me))),
     navItem('home', 'Home', '', 'home'),
     navItem('all', 'All tracks', S.tracks.length, 'music'),
@@ -347,7 +349,7 @@ function renderSide() {
 function visibleTracks() {
   let list = S.view.type === 'project' ? (isShared(S.view.id) ? S.sharedTracks : S.tracks).filter(t => t.project_id === S.view.id)
     : S.view.type === 'offline' ? [...S.tracks, ...S.sharedTracks].filter(isOffline)
-      : S.view.type === 'starred' ? S.tracks.filter(t => t.mark === 'star') : [...S.tracks];
+      : S.view.type === 'starred' ? S.tracks.filter(t => t.mark === 'star') : S.q ? [...S.tracks, ...S.sharedTracks] : [...S.tracks]; // searching covers shared projects too
   const q = S.q.toLowerCase();
   if (q) list = list.filter(t => [t.name, t.tags, t.notes, t.artist, projectOf(t.project_id)?.name].some(v => (v || '').toLowerCase().includes(q)));
   const f = S.filter;
@@ -1258,6 +1260,27 @@ function trackMenu(t, list) {
       toast(`Moved “${t.name}” to the trash`, { ms: 7000, action: { label: 'Undo', run: () => restore('track', t.id) } });
     } },
   ]);
+}
+
+// Inbox: every notification (comments, listens, invite requests, projects shared with you), newest first.
+async function inboxDialog() {
+  document.body.classList.remove('side-open');
+  const list = h('div', { className: 'list' }, h('div', { className: 'muted' }, 'Loading…'));
+  const d = dialog(h('div', { className: 'stack' }, h('h2', {}, 'Inbox'), list,
+    h('div', { className: 'btns' }, h('button', { className: 'btn primary', onclick: () => d.close() }, 'Done'))), { className: 'settings-dlg' });
+  const open = url => {
+    d.close();
+    const track = /^\/\?track=([\w-]+)$/.exec(url || '')?.[1];
+    if (track && trackOf(track)) (canEdit(trackOf(track).project_id) ? detailsDialog : commentsDialog)(trackOf(track));
+    else if (/^\/s\/[0-9a-f]{32}$/.test(url || '')) location.href = url;
+    else if (url === '/' && S.me?.isAdmin && /invite/.test(lastTitle)) peopleDialog();
+  };
+  let lastTitle = '';
+  const rows = await api('/inbox').catch(e => (oops(e), []));
+  fill(list, rows.length ? rows.map(n => h('button', { type: 'button', className: 'item inbox-item' + (n.read ? '' : ' unread'), onclick: () => { lastTitle = n.title; open(n.url); } },
+    h('span', { className: 'grow' }, h('b', {}, n.title), n.body && h('div', { className: 'muted' }, n.body), h('div', { className: 'mono', style: { color: 'var(--fg-3)', fontSize: '11px' } }, fmtDate(n.created_at)))))
+    : h('div', { className: 'muted' }, 'Nothing yet. Comments, listens, invite requests and projects shared with you show up here.'));
+  if (S.unread) { S.unread = 0; renderSide(); api('/inbox/read', { method: 'POST' }).catch(() => {}); }
 }
 
 // Comments on a track, from share links and from people on the project. Writing one pins it to where you are in the track.

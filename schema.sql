@@ -28,7 +28,6 @@ CREATE TABLE IF NOT EXISTS presets (
   id TEXT PRIMARY KEY, name TEXT NOT NULL, settings TEXT NOT NULL, owner_id TEXT NOT NULL DEFAULT 'owner', created_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS bandwidth (day TEXT PRIMARY KEY, bytes INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS login_attempts (key TEXT PRIMARY KEY, count INTEGER NOT NULL, first_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS push_subs (endpoint TEXT PRIMARY KEY, p256dh TEXT NOT NULL, auth TEXT NOT NULL, owner_id TEXT NOT NULL DEFAULT 'owner', created_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS comments (
@@ -47,7 +46,7 @@ CREATE TABLE IF NOT EXISTS users (
   avatar TEXT, storage TEXT NOT NULL DEFAULT 'drive', drive_refresh TEXT, drive_folder TEXT, session TEXT,
   upload_key TEXT, disabled INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL
 );
-CREATE TABLE IF NOT EXISTS invites (code TEXT PRIMARY KEY, created_by TEXT NOT NULL, used_by TEXT, used_at INTEGER, disabled INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS invites (code TEXT PRIMARY KEY, created_by TEXT NOT NULL, used_by TEXT, used_at INTEGER, created_at INTEGER NOT NULL);
 INSERT OR IGNORE INTO users (id, username, is_admin, storage, created_at) VALUES ('owner', 'admin', 1, 'b2', 0);
 CREATE INDEX IF NOT EXISTS projects_owner ON projects (owner_id);
 CREATE INDEX IF NOT EXISTS folders_owner ON folders (owner_id);
@@ -58,3 +57,5 @@ CREATE INDEX IF NOT EXISTS members_user ON project_members (user_id);
 CREATE TABLE IF NOT EXISTS access_requests (id INTEGER PRIMARY KEY AUTOINCREMENT, share_token TEXT, name TEXT NOT NULL, contact TEXT, message TEXT, created_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS activity (id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL, user_id TEXT, text TEXT NOT NULL, created_at INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS activity_project ON activity (project_id, created_at);
+CREATE TABLE IF NOT EXISTS inbox (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, title TEXT NOT NULL, body TEXT, url TEXT, read INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS inbox_user ON inbox (user_id, created_at);

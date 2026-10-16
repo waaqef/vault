@@ -239,7 +239,10 @@ async function purgeOldTrash(env) {
   ]);
   for (const r of p.results) await deleteProject(env, r.id);
   for (const r of t.results) await deleteTrack(env, r.id);
-  await env.DB.prepare('DELETE FROM activity WHERE created_at < ?').bind(now() - 90 * DAY).run();
+  await env.DB.batch([
+    env.DB.prepare('DELETE FROM activity WHERE created_at < ?').bind(now() - 90 * DAY),
+    env.DB.prepare('DELETE FROM inbox WHERE created_at < ?').bind(now() - 60 * DAY),
+  ]);
 }
 
 // Projects shared with this user (added as a viewer/editor, or saved from a link), and single saved tracks.
@@ -264,13 +267,14 @@ on('GET', '/api/tree', async (req, env, b, p, url, ctx, u) => {
   ]);
   const comments = Object.fromEntries(cm.results.map(r => [r.track_id, r.n]));
   const s = await space(env, u);
-  const [sp, st, sv] = await env.DB.batch([
+  const [sp, st, sv, ib] = await env.DB.batch([
     env.DB.prepare(SHARED_P).bind(u.id, u.id, u.id, ...readArgs(u)),
     env.DB.prepare(SHARED_T).bind(u.id, ...readArgs(u)),
     env.DB.prepare(SAVED_T).bind(u.id, u.id, now(), ...readArgs(u)),
+    env.DB.prepare('SELECT COUNT(*) AS n FROM inbox WHERE user_id = ? AND read = 0').bind(u.id),
   ]);
   return json({ folders: f.results, projects: pr.results, tracks: t.results, comments, trash: tr.results[0].n,
-    shared: { projects: sp.results, tracks: st.results, singles: sv.results },
+    shared: { projects: sp.results, tracks: st.results, singles: sv.results }, unread: ib.results[0].n,
     usage: s.usage, limit: s.limit, me: publicUser(u, { driveEmail: s.email || '', needsDrive: usesDrive(env, u) && !u.drive_refresh }) });
 });
 
@@ -540,7 +544,7 @@ on('POST', '/api/tracks/:id/comments', async (req, env, b, { id }, url, ctx, u) 
   const c = { id: uid(), name: u.username, at, body, created_at: now(), user_id: u.id };
   await env.DB.prepare("INSERT INTO comments (id, share_token, track_id, name, at, body, user_id, created_at) VALUES (?, '', ?, ?, ?, ?, ?, ?)").bind(c.id, id, c.name, at, body, u.id, c.created_at).run();
   await logActivity(env, t.project_id, u, `commented on “${t.name}”`);
-  commentNotify(ctx, env, url, t, t.owner_id, u.id, c, () => '/?track=' + t.id);
+  ctx?.waitUntil?.(commentNotify(ctx, env, url, t, t.owner_id, u.id, c, () => '/?track=' + t.id)); // keep running after the reply
   return json(c);
 });
 on('DELETE', '/api/comments/:id', async (req, env, b, { id }, url, ctx, u) => {
@@ -714,6 +718,13 @@ on('GET', '/api/projects/:id/activity', async (req, env, b, { id }, url, ctx, u)
   if (!(await env.DB.prepare(`SELECT 1 FROM projects WHERE id = ? AND id IN ${MEMBER}`).bind(id, u.id, u.id).first())) return fail('Not found', 404);
   return json((await env.DB.prepare('SELECT a.text, a.created_at, x.username, x.avatar FROM activity a LEFT JOIN users x ON x.id = a.user_id WHERE a.project_id = ? ORDER BY a.created_at DESC LIMIT 80').bind(id).all()).results);
 });
+// The inbox: newest first; opening it marks everything read.
+on('GET', '/api/inbox', async (req, env, b, p, url, ctx, u) =>
+  json((await env.DB.prepare('SELECT id, title, body, url, read, created_at FROM inbox WHERE user_id = ? ORDER BY created_at DESC LIMIT 60').bind(u.id).all()).results));
+on('POST', '/api/inbox/read', async (req, env, b, p, url, ctx, u) => {
+  await env.DB.prepare('UPDATE inbox SET read = 1 WHERE user_id = ? AND read = 0').bind(u.id).run();
+  return json({ ok: true });
+});
 // Remove a shared project (or a single saved track) from my library: leaves it and forgets saved links to it.
 on('POST', '/api/shared/leave', async (req, env, b, p, url, ctx, u) => {
   const kind = b.track_id ? 'track' : 'project', target = b.track_id || b.project_id;
@@ -814,11 +825,6 @@ async function driveCallback(req, env, url) {
 const drivePage = msg => `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>[vault]</title>
 <body style="margin:0;min-height:100vh;display:grid;place-items:center;background:#191919;color:#fff;font:16px/1.5 system-ui,sans-serif;text-align:center;padding:24px">
 <div><div style="font-weight:600;font-size:22px;margin-bottom:10px">[vault]</div><p>${msg === 'connected' ? 'Google Drive is connected. Go back to the [vault] app.' : String(msg).replace(/[<>&"]/g, '')}</p></div>`;
-on('POST', '/api/drive/disconnect', async (req, env, b, p, url, ctx, u) => {
-  if (u.id === OWNER) return fail('The admin account uses Backblaze.');
-  await env.DB.prepare('UPDATE users SET drive_refresh = NULL WHERE id = ?').bind(u.id).run();
-  return json({ ok: true });
-});
 
 // ---- admin: invites and people ----
 const adminOnly = u => (u.is_admin ? null : fail('Only the admin can do that', 403));
@@ -881,6 +887,7 @@ async function deleteAccount(env, id) {
     env.DB.prepare('DELETE FROM saved_shares WHERE user_id = ?').bind(id),
     env.DB.prepare('DELETE FROM invites WHERE used_by = ?').bind(id),
     env.DB.prepare('DELETE FROM project_members WHERE user_id = ?').bind(id),
+    env.DB.prepare('DELETE FROM inbox WHERE user_id = ?').bind(id),
     env.DB.prepare('DELETE FROM users WHERE id = ?').bind(id),
   ]);
   return { ok: true };
@@ -1028,7 +1035,11 @@ async function commentNotify(ctx, env, url, t, ownerId, authorId, c, linkFor) {
   for (const id of new Set([ownerId, ...others.results.map(r => r.user_id), ...members.results.map(r => r.user_id)]))
     if (id !== authorId) notify(ctx, env, id, { ...msg, url: linkFor(id) }, url.origin);
 }
-const notify = (ctx, env, ownerId, payload, origin) => ctx?.waitUntil?.(sendPush(env, ownerId, payload, origin).catch(() => {}));
+// Every notification also lands in the person's inbox (the 🔔 in the app), whether or not push is on for a device.
+const notify = (ctx, env, ownerId, payload, origin) => ctx?.waitUntil?.(Promise.all([
+  env.DB.prepare('INSERT INTO inbox (user_id, title, body, url, created_at) VALUES (?, ?, ?, ?, ?)').bind(ownerId, payload.title.slice(0, 200), String(payload.body || '').slice(0, 300), payload.url || '/', now()).run(),
+  sendPush(env, ownerId, payload, origin),
+]).catch(() => {}));
 
 // ---- public share pages -----------------------------------------------------
 async function openShare(env, token) {
@@ -1090,15 +1101,6 @@ async function previewFile(env, req, t, owner) {
   return new Response(r.body, { status: m ? 206 : 200, headers });
 }
 
-// Email the admin through Resend (free: 100 a day). Only once RESEND_API_KEY and NOTIFY_EMAIL are set (node setup.mjs email).
-// Resend's shared sender can only email the address the Resend account was made with, which is all this needs.
-async function emailAdmin(env, subject, text) {
-  if (!env.RESEND_API_KEY || !env.NOTIFY_EMAIL) return;
-  await fetch('https://api.resend.com/emails', { method: 'POST',
-    headers: { authorization: `Bearer ${env.RESEND_API_KEY}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ from: '"[vault]" <onboarding@resend.dev>', to: [env.NOTIFY_EMAIL], subject, text }) }).catch(() => {});
-}
-
 // Ask the admin for an invite (from the sign-up screen, or a share page's sign-in card). A few per address, then a wait.
 async function requestInvite(req, env, ctx, url, token = null) {
   const lockKey = 'request:' + clientIp(req), wait = await lockedFor(env, lockKey);
@@ -1109,15 +1111,6 @@ async function requestInvite(req, env, ctx, url, token = null) {
   await recordFail(env, lockKey);
   await env.DB.prepare('INSERT INTO access_requests (share_token, name, contact, message, created_at) VALUES (?, ?, ?, ?, ?)')
     .bind(token, name, String(b.contact || '').trim().slice(0, 200), String(b.message || '').trim().slice(0, 500), now()).run();
-  const contact = String(b.contact || '').trim(), note = String(b.message || '').trim();
-  ctx?.waitUntil?.(emailAdmin(env, `${name} wants an invite to [vault]`,
-    `${name} asked for an invite ${token ? 'from a share link' : 'from the sign-up screen'}.
-
-How to reach them: ${contact || '(not given)'}
-Note: ${note || '(none)'}
-
-Make a code in [vault]: profile picture → People → New invite code.
-${url.origin}/`));
   notify(ctx, env, OWNER, { title: `${name} wants an invite to [vault]`, body: String(b.message || b.contact || (token ? 'From a share link' : 'From the sign-up screen')).slice(0, 200), tag: 'request', url: '/' }, url.origin);
   return json({ ok: true });
 }
@@ -1237,6 +1230,11 @@ export default {
       if (path === '/google6e583667ce62f72e.html') return new Response('google-site-verification: google6e583667ce62f72e.html', { headers: { 'content-type': 'text/html; charset=utf-8' } });
       if (path.startsWith('/s/')) return await handleShare(req, env, url, ctx);
       if (path.startsWith('/blob/') && env.LOCAL) return await localBlob(req, env, path.slice(6));
+      if (path === '/sw.js') {
+        const r = await env.ASSETS.fetch(req);
+        const v = env.VERSION?.id || 'dev';
+        return new Response((await r.text()).replace('__VERSION__', v.slice(0, 12)), { headers: { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-cache' } });
+      }
       if (!path.startsWith('/api/')) return env.ASSETS.fetch(req);
 
       if (path === '/api/login' && req.method === 'POST') return await login(req, env);
