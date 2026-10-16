@@ -1312,3 +1312,7 @@ dialog label { grid-template-columns: minmax(0, 1fr); }
   dialog.sheet[open], dialog.settings-dlg[open] { animation: pop .28s var(--ease); }
   dialog.sheet.closing, dialog.settings-dlg.closing { animation: pop-out .19s var(--ease) forwards !important; }
 }
+/* no focus ring on the pop-up itself (it gets focus on opening, which looked like a yellow "selected" border),
+   and none at all on touch screens; keyboards on computers still get rings on buttons */
+dialog:focus, dialog:focus-visible { outline: none; }
+@media (pointer: coarse) { dialog :focus-visible { outline: none; } }
