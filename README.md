@@ -51,26 +51,6 @@ Open http://localhost:8787. The password is whatever is in `.dev.vars` (create t
 - **Offline:** use ⋯ → Save offline, or Save all offline on a project. Saved tracks play with no connection.
 - **Record:** captures an idea from the microphone into the current project.
 
-## Accounts for other people
-
-You're the admin: sign in with just your password (leave the username empty). Other people get their own account,
-and their music is kept in **their own Google Drive** (15 GB free each), so it never uses your Backblaze space.
-Nobody can see anyone else's projects; share links work the same as yours.
-
-1. One-time Google setup (free): in [Google Cloud console](https://console.cloud.google.com/) make a project, turn on
-   the **Google Drive API**, set up the **OAuth consent screen** (External, add the scope `.../auth/drive.file`, then **Publish app**:
-   apps left in Testing are signed out of Drive every 7 days, and `drive.file` needs no Google review), then **Credentials → Create OAuth client ID →
-   Web application** with the redirect URI `https://vault.choseroxy.workers.dev/api/drive/callback`.
-2. Run `node setup.mjs google` and paste the client ID and secret.
-3. In [vault], **Settings → [account] → People → New invite code**, and send the code. They choose **Sign up** on the
-   login screen, pick a username, password and picture, then tap **Connect Google Drive**.
-
-People without a code can tap **No invite code? Ask for one** (on sign-up, or on any share link); requests show up in
-People. People can delete their own account (Account → Delete account), and you can **Reset password** for anyone
-who forgets theirs.
-
-Keep `APP_PASSWORD` as it is once others have accounts: their passwords and Drive connections are tied to it.
-
 ## Limits worth knowing
 
 - An iPhone web app can't appear in the share sheet (AirDrop, iMessage). Save the file to Files, then upload.
