@@ -1,40 +1,322 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>[vault] Music project storage</title>
-<meta name="description" content="[vault] is a private, invite-only app for storing, playing, editing and sharing work-in-progress music projects.">
+<meta name="description" content="[vault] is an open-source personal project: a private, invite-only app for storing, playing, editing and sharing work-in-progress music projects.">
+<meta name="theme-color" content="#191919">
 <link rel="icon" href="/icon.svg">
-<style>body{max-width:720px;margin:0 auto;padding:48px 16px 80px;font:16px/1.6 system-ui,sans-serif;background:#111;color:#ddd}h1,h2{color:#fff;letter-spacing:-.02em}h1{font-size:40px;margin:12px 0 4px}h2{font-size:19px;margin-top:36px}a{color:#9cf}.lead{font-size:18px;color:#bbb}.btn{display:inline-block;margin-top:16px;padding:10px 22px;border-radius:999px;background:#fff;color:#111;font-weight:600;text-decoration:none}footer{margin-top:48px;padding-top:16px;border-top:1px solid #333;font-size:14px;color:#888}footer a{margin-right:16px}img{display:block}</style>
+<style>
+@font-face { font-family: "Inter"; src: url("/fonts/inter.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
+@font-face { font-family: "Plex Mono"; src: url("/fonts/plex-mono.woff2") format("woff2"); font-weight: 400; font-display: swap; }
+:root {
+  --bg: #191919; --fg: #fff; --fg-2: rgba(255,255,255,.62); --fg-3: rgba(255,255,255,.38); --line: rgba(255,255,255,.08);
+  --sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --ease: cubic-bezier(.2,.8,.2,1);
+  --grain: url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%27140%27 height=%27140%27%3E%3Cfilter id=%27n%27%3E%3CfeTurbulence type=%27fractalNoise%27 baseFrequency=%27.9%27 numOctaves=%272%27 stitchTiles=%27stitch%27/%3E%3CfeColorMatrix values=%270 0 0 0 1 0 0 0 0 1 0 0 0 0 1 .16 0 0 0 0%27/%3E%3C/filter%3E%3Crect width=%27100%25%27 height=%27100%25%27 filter=%27url(%23n)%27/%3E%3C/svg%3E");
+  --grain-soft: url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%27160%27 height=%27160%27%3E%3Cfilter id=%27n%27%3E%3CfeTurbulence type=%27fractalNoise%27 baseFrequency=%27.85%27 numOctaves=%272%27 stitchTiles=%27stitch%27/%3E%3CfeColorMatrix values=%270 0 0 0 1 0 0 0 0 1 0 0 0 0 1 .075 0 0 0 0%27/%3E%3C/filter%3E%3Crect width=%27100%25%27 height=%27100%25%27 filter=%27url(%23n)%27/%3E%3C/svg%3E");
+  --glass: var(--grain) 0 0 / 140px, radial-gradient(120% 100% at 10% -40%, rgba(255,255,255,.14), transparent 60%), linear-gradient(165deg, rgba(62,62,62,.62), rgba(28,28,28,.56));
+  --glass-edge: inset 0 1px 0 rgba(255,255,255,.2), inset 0 0 0 1px rgba(255,255,255,.07), inset 0 -1px 0 rgba(0,0,0,.25), 0 16px 44px rgba(0,0,0,.45);
+  --glass-blur: blur(24px) saturate(170%);
+  --raised: var(--grain) 0 0 / 140px, linear-gradient(180deg, rgba(255,255,255,.11), rgba(255,255,255,.035));
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 400 16px/1.55 var(--sans); letter-spacing: -0.011em; -webkit-font-smoothing: antialiased; overflow-x: hidden; }
+a { color: inherit; }
+.mono { font-family: var(--mono); font-size: 12px; letter-spacing: 0; color: var(--fg-3); }
+.glass { background: var(--glass); box-shadow: var(--glass-edge); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); }
+
+/* the page: a slow pastel wash drifting under a fine grain */
+.wash { position: fixed; inset: -20%; z-index: -2; pointer-events: none; filter: blur(40px); animation: drift 38s ease-in-out infinite alternate; }
+.wash i { position: absolute; border-radius: 50%; opacity: .5; }
+.wash i:nth-child(1) { width: 46vw; height: 46vw; left: 6%; top: 4%; background: radial-gradient(closest-side, rgba(250,126,30,.32), transparent); }
+.wash i:nth-child(2) { width: 52vw; height: 52vw; right: 2%; top: 18%; background: radial-gradient(closest-side, rgba(214,41,118,.28), transparent); animation: drift 26s ease-in-out infinite alternate-reverse; }
+.wash i:nth-child(3) { width: 44vw; height: 44vw; left: 30%; top: 56%; background: radial-gradient(closest-side, rgba(79,91,213,.3), transparent); animation: drift 31s ease-in-out infinite alternate; }
+.wash i:nth-child(4) { width: 30vw; height: 30vw; left: -4%; top: 62%; background: radial-gradient(closest-side, rgba(254,218,117,.18), transparent); }
+@keyframes drift { 0% { transform: translate3d(0,0,0) rotate(0deg); } 100% { transform: translate3d(4%, -3%, 0) rotate(8deg); } }
+.grain { position: fixed; inset: 0; z-index: -1; pointer-events: none; background: var(--grain-soft) 0 0 / 160px; }
+
+/* nav */
+nav { position: sticky; top: 12px; z-index: 10; max-width: 1080px; margin: 12px auto 0; padding: 8px 8px 8px 18px; border-radius: 999px; display: flex; align-items: center; gap: 6px; }
+nav .brand { font-weight: 600; font-size: 17px; letter-spacing: -0.035em; text-decoration: none; margin-right: auto; }
+nav .lnk { font-family: var(--mono); font-size: 12px; color: var(--fg-2); text-decoration: none; padding: 8px 10px; border-radius: 999px; transition: color .15s, background .15s; }
+nav .lnk:hover { color: var(--fg); background: rgba(255,255,255,.06); }
+.btn { display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 20px; border-radius: 999px; font-weight: 600; font-size: 14px; text-decoration: none; transition: transform .12s var(--ease), filter .15s; }
+.btn:active { transform: scale(.96); }
+.btn.primary { background: var(--grain) 0 0 / 140px, linear-gradient(180deg, #fff, #d9d9d9); color: #111; box-shadow: inset 0 1px 0 #fff, 0 8px 24px rgba(0,0,0,.35); }
+.btn.primary:hover { filter: brightness(1.06); }
+.btn.ghost { background: var(--raised); color: var(--fg); box-shadow: inset 0 1px 0 rgba(255,255,255,.14), inset 0 0 0 1px rgba(255,255,255,.06); }
+nav .btn { height: 34px; padding: 0 16px; font-size: 13px; }
+
+main { max-width: 1080px; margin: 0 auto; padding: 0 16px; }
+
+/* hero */
+.hero { display: grid; grid-template-columns: 1.05fr .95fr; align-items: center; gap: 40px; min-height: min(760px, 88vh); padding: 40px 0 24px; }
+.kicker { display: inline-flex; gap: 8px; align-items: center; padding: 6px 12px; border-radius: 999px; }
+.kicker b { width: 6px; height: 6px; border-radius: 50%; background: #7dff9a; box-shadow: 0 0 10px #7dff9a; }
+h1 { font-size: clamp(44px, 7vw, 84px); line-height: .96; letter-spacing: -0.055em; font-weight: 650; margin: 22px 0 18px; }
+h1 em { font-style: normal; color: transparent; background: linear-gradient(100deg, #feda75, #fa7e1e 30%, #d62976 60%, #962fbf 80%, #4f5bd5); -webkit-background-clip: text; background-clip: text; }
+.sub { font-size: 18px; color: var(--fg-2); max-width: 30em; margin: 0 0 28px; }
+.ctas { display: flex; gap: 10px; flex-wrap: wrap; }
+
+/* the record and its now-playing card */
+.stage { position: relative; aspect-ratio: 1; max-width: 480px; width: 100%; justify-self: center; }
+.disc { position: absolute; inset: 4%; border-radius: 50%; animation: spin 9s linear infinite;
+  background:
+    radial-gradient(circle at 50% 50%, #151515 0 11%, rgba(255,255,255,.4) 11.4% 12.6%, transparent 13%),
+    repeating-radial-gradient(circle at 50% 50%, rgba(0,0,0,.18) 0 1px, transparent 1px 4px),
+    conic-gradient(from 30deg, #2a2a2a, #6d6d6d 12%, #2e2e2e 25%, #8a8a8a 38%, #2b2b2b 52%, #5e5e5e 66%, #262626 80%, #7a7a7a 92%, #2a2a2a);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.1), 0 40px 90px rgba(0,0,0,.6); }
+.disc::after { content: ""; position: absolute; inset: 0; border-radius: 50%; background: var(--grain) 0 0 / 140px; mix-blend-mode: overlay; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.np { position: absolute; left: -6%; right: 14%; bottom: 2%; padding: 14px 16px 16px; border-radius: 20px; animation: float 7s ease-in-out infinite; }
+@keyframes float { 50% { transform: translateY(-8px); } }
+.np-top { display: flex; align-items: center; gap: 12px; }
+.np-art { width: 42px; height: 42px; border-radius: 10px; flex: none; background: var(--grain) 0 0 / 140px, linear-gradient(135deg, #fa7e1e, #d62976 55%, #4f5bd5); }
+.np-t { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.np-play { margin-left: auto; width: 34px; height: 34px; border-radius: 50%; flex: none; display: grid; place-items: center; background: #fff; color: #111; }
+.wave { display: flex; align-items: center; gap: 2px; height: 40px; margin: 12px 0 6px; }
+.wave i { flex: 1; border-radius: 2px; background: rgba(255,255,255,.26); min-height: 3px; transition: background .2s; }
+.wave i.on { background: #fff; }
+.np-time { display: flex; justify-content: space-between; }
+.chip { position: absolute; padding: 7px 12px; border-radius: 999px; font-size: 13px; display: flex; gap: 6px; align-items: center; white-space: nowrap; }
+.chip.c1 { top: 6%; right: -2%; animation: float 6s ease-in-out -2s infinite; }
+.chip.c2 { top: 36%; left: -10%; animation: float 8s ease-in-out -4s infinite; }
+
+/* sections */
+section { padding: 72px 0 8px; }
+h2 { font-size: clamp(30px, 4.4vw, 46px); line-height: 1.02; letter-spacing: -0.045em; font-weight: 650; margin: 10px 0 14px; max-width: 16em; }
+.lede { color: var(--fg-2); max-width: 36em; margin: 0 0 32px; font-size: 17px; }
+
+/* feature grid: each card shows a little bit of the real app */
+.grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 14px; }
+.card { border-radius: 22px; padding: 22px; display: flex; flex-direction: column; gap: 8px; min-height: 230px; overflow: hidden; position: relative; transition: transform .35s var(--ease); }
+.card:hover { transform: translateY(-3px); }
+.card h3 { margin: auto 0 0; font-size: 20px; letter-spacing: -0.03em; font-weight: 620; }
+.card p { margin: 0; color: var(--fg-2); font-size: 14.5px; }
+.s2 { grid-column: span 2; } .s3 { grid-column: span 3; } .s4 { grid-column: span 4; }
+.viz { margin: 4px 0 14px; }
+/* library tree */
+.tree { font-size: 13px; display: grid; gap: 4px; }
+.tree div { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 9px; }
+.tree div.on { background: rgba(255,255,255,.07); }
+.tree .d { width: 20px; height: 20px; border-radius: 50%; flex: none; background: radial-gradient(circle, #191919 0 14%, transparent 15%), conic-gradient(#333, #888, #333, #777, #333); }
+.tree .n { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--fg-3); }
+/* editor knobs */
+.knobs { display: flex; gap: 18px; }
+.knob { width: 54px; height: 54px; border-radius: 50%; position: relative; background: var(--raised); box-shadow: inset 0 1px 0 rgba(255,255,255,.18), 0 6px 18px rgba(0,0,0,.4); }
+.knob::after { content: ""; position: absolute; left: 50%; top: 7px; width: 2px; height: 12px; margin-left: -1px; border-radius: 2px; background: #fff; transform-origin: 50% 20px; transform: rotate(var(--r)); animation: twist 6s ease-in-out infinite alternate; }
+@keyframes twist { to { transform: rotate(calc(var(--r) * -1)); } }
+.knob + .mono { display: block; text-align: center; margin-top: 6px; }
+.eq { width: 100%; height: 70px; }
+/* share */
+.listens { display: grid; gap: 6px; font-size: 13px; }
+.listens div { display: flex; gap: 10px; align-items: center; padding: 8px 10px; border-radius: 12px; background: rgba(255,255,255,.05); }
+.av { width: 24px; height: 24px; border-radius: 50%; flex: none; display: grid; place-items: center; font-size: 11px; font-weight: 700; color: #111; }
+.listens .bar { margin-left: auto; width: 60px; height: 4px; border-radius: 4px; background: rgba(255,255,255,.12); overflow: hidden; }
+.listens .bar i { display: block; height: 100%; background: #fff; }
+/* upload */
+.drop { border: 1.5px dashed rgba(255,255,255,.22); border-radius: 14px; padding: 14px; display: grid; gap: 8px; font-size: 13px; }
+.drop .row { display: flex; justify-content: space-between; }
+.prog { height: 4px; border-radius: 4px; background: rgba(255,255,255,.12); overflow: hidden; }
+.prog i { display: block; height: 100%; width: 30%; background: #fff; animation: up 3.2s var(--ease) infinite; }
+@keyframes up { 0% { width: 4%; } 80%, 100% { width: 100%; } }
+.big { font-size: 46px; font-weight: 650; letter-spacing: -0.05em; line-height: 1; }
+
+/* drive */
+.drive { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.flow { border-radius: 22px; padding: 28px; display: grid; align-content: center; gap: 14px; }
+.node { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 14px; background: var(--raised); box-shadow: inset 0 1px 0 rgba(255,255,255,.12); font-weight: 600; font-size: 15px; }
+.node small { display: block; font-weight: 400; color: var(--fg-3); font-family: var(--mono); font-size: 11px; }
+.node .ic { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; flex: none; background: rgba(255,255,255,.08); }
+.node.dim { opacity: .35; text-decoration: line-through; text-decoration-color: rgba(255,255,255,.5); }
+.arrow { text-align: center; font-family: var(--mono); font-size: 11px; color: var(--fg-3); }
+.uses { border-radius: 22px; padding: 28px; }
+.uses ul { list-style: none; padding: 0; margin: 14px 0 18px; display: grid; gap: 10px; }
+.uses li { display: flex; gap: 12px; color: var(--fg-2); font-size: 15px; }
+.uses li::before { content: "✓"; color: #7dff9a; font-weight: 700; }
+.uses li.no::before { content: "×"; color: #ff6b63; }
+.uses p { color: var(--fg-2); font-size: 14px; margin: 0; }
+.uses a { color: var(--fg); }
+
+/* open source + footer */
+.oss { border-radius: 26px; padding: 34px; display: flex; align-items: center; gap: 24px; flex-wrap: wrap; justify-content: space-between; margin-top: 72px; }
+.oss h2 { margin: 6px 0 4px; font-size: 30px; }
+.oss p { margin: 0; color: var(--fg-2); }
+footer { max-width: 1080px; margin: 48px auto 0; padding: 22px 16px 40px; display: flex; gap: 18px; flex-wrap: wrap; align-items: center; border-top: 1px solid var(--line); }
+footer a { font-family: var(--mono); font-size: 12px; color: var(--fg-2); text-decoration: none; }
+footer a:hover { color: var(--fg); }
+footer .brand { margin-right: auto; font-weight: 600; letter-spacing: -0.035em; color: var(--fg); font-family: var(--sans); font-size: 15px; }
+
+/* scroll-in */
+.rise { opacity: 0; transform: translateY(18px); transition: opacity .8s var(--ease), transform .8s var(--ease); }
+.rise.in { opacity: 1; transform: none; }
+
+@media (max-width: 860px) {
+  .hero { grid-template-columns: 1fr; min-height: 0; padding-top: 28px; gap: 28px; }
+  .stage { max-width: 380px; }
+  .grid { grid-template-columns: 1fr 1fr; }
+  .s2, .s3, .s4 { grid-column: span 2; }
+  .drive { grid-template-columns: 1fr; }
+  nav .lnk { display: none; }
+  .chip.c2 { left: -2%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+  .rise { opacity: 1; transform: none; }
+}
+</style>
 </head><body>
-<img src="/icon-192.png" width="64" height="64" alt="[vault] logo">
-<h1>[vault]</h1>
-<p class="lead">A private, invite-only app for storing and working on music projects, inspired by [untitled].</p>
-<a class="btn" href="/">Sign in</a>
+<div class="wash" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+<div class="grain" aria-hidden="true"></div>
 
-<h2>What [vault] does</h2>
-<ul>
-<li><b>Store your music projects.</b> Keep beats, demos and ideas in projects and folders, with cover art, notes, tags, BPM and key.</li>
-<li><b>Play everything back.</b> Waveforms, a queue, a full-screen player, and songs kept on your device so they play offline.</li>
-<li><b>Edit the audio.</b> Varispeed, pitch, EQ, compressor, gain, trims and fades, saved as a new version of the track while older versions stay available.</li>
-<li><b>Share with a link.</b> Share a project or a track. Listeners can play it and leave comments at a moment in the track, and you can see who listened.</li>
-<li><b>Upload from anywhere.</b> Upload from a phone or computer, or straight from the iPhone share sheet.</li>
-</ul>
+<nav class="glass" aria-label="Main">
+  <a class="brand" href="/about">[vault]</a>
+  <a class="lnk" href="#features">[features]</a>
+  <a class="lnk" href="#drive">[your data]</a>
+  <a class="lnk" href="https://github.com/waaqef/vault">[source]</a>
+  <a class="btn primary" href="/">Sign in</a>
+</nav>
 
-<h2>Accounts</h2>
-<p>[vault] is invite-only. Each person gets an invite code from the admin, then signs up with a username, password and optional profile picture. Nobody can see anyone else's projects or files.</p>
+<main>
+  <header class="hero">
+    <div>
+      <span class="kicker glass mono"><b></b> open source · personal project</span>
+      <h1>Every <em>unfinished</em> song, kept safe.</h1>
+      <p class="sub">[vault] is an open-source personal project: a private, invite-only home for work-in-progress music. Store your beats, demos and ideas, play them anywhere, edit the audio, and share them with a link.</p>
+      <div class="ctas"><a class="btn primary" href="/">Sign in</a><a class="btn ghost" href="/">Have an invite code?</a></div>
+    </div>
+    <div class="stage" aria-hidden="true">
+      <div class="disc"></div>
+      <div class="chip glass c1">🎧 <b>3</b> <span class="mono">listens today</span></div>
+      <div class="chip glass c2">★ <span class="mono">starred</span></div>
+      <div class="np glass">
+        <div class="np-top"><span class="np-art"></span><div style="min-width:0"><div class="np-t">late night idea (final final)</div><div class="mono">142 BPM · F min</div></div>
+          <span class="np-play"><svg width="12" height="14" viewBox="0 0 12 14"><path d="M1 1v12l10-6z" fill="currentColor"/></svg></span></div>
+        <div class="wave" id="wave"></div>
+        <div class="np-time mono"><span id="t">0:00</span><span>2:48</span></div>
+      </div>
+    </div>
+  </header>
 
-<h2>Why [vault] asks for access to Google Drive</h2>
-<p>When you sign up, [vault] asks you to connect your Google Drive. Your music is stored in your own Drive, in a folder called [vault], so it uses your own storage and stays under your control.</p>
-<p>[vault] requests only the <code>drive.file</code> permission. That lets it create, read and delete only the files it uploaded itself. It cannot see or change anything else in your Drive. It uses this access only to:</p>
-<ul>
-<li>upload the songs and cover art you add to [vault],</li>
-<li>play, download and edit those files for you,</li>
-<li>delete them when you delete them in [vault],</li>
-<li>show how much Drive storage you have left, and which Google account is connected.</li>
-</ul>
-<p>Your Google data is never sold, never used for ads, and never shared with anyone else. You can remove [vault]'s access at any time from <a href="https://myaccount.google.com/permissions">your Google Account permissions</a>. Details are in the <a href="/privacy">Privacy Policy</a>.</p>
+  <section id="features">
+    <span class="mono">[what it does]</span>
+    <h2>Built for the messy middle of making music.</h2>
+    <p class="lede">Not a streaming service and not a DAW. [vault] is where the bounces, the voice memos and the twelve versions of the same hook all live together.</p>
+    <div class="grid">
+      <div class="card glass s3 rise">
+        <div class="viz tree">
+          <div><span class="mono">▾</span> 📁 Beats 2026</div>
+          <div class="on"><span class="d"></span> trap ideas <span class="n">24</span></div>
+          <div><span class="d"></span> for the EP <span class="n">9</span></div>
+          <div><span class="d"></span> Inbox <span class="n">3</span></div>
+        </div>
+        <span class="mono">[library]</span><h3>Projects and folders</h3>
+        <p>Organise tracks your way, with cover art, notes and tags. BPM and key are detected for you.</p>
+      </div>
+      <div class="card glass s3 rise">
+        <div class="viz">
+          <svg class="eq" viewBox="0 0 300 70" preserveAspectRatio="none" aria-hidden="true">
+            <path d="M0 40 C40 40 50 18 80 20 S120 52 150 50 S210 26 240 30 S280 40 300 38" fill="none" stroke="#fff" stroke-width="2"/>
+            <path d="M0 40 C40 40 50 18 80 20 S120 52 150 50 S210 26 240 30 S280 40 300 38 V70 H0Z" fill="rgba(255,255,255,.07)"/>
+            <circle cx="80" cy="20" r="5" fill="#fff"/><circle cx="150" cy="50" r="5" fill="#fff"/><circle cx="240" cy="30" r="5" fill="#fff"/>
+          </svg>
+          <div class="knobs"><div><div class="knob" style="--r:-60deg"></div><span class="mono">speed</span></div><div><div class="knob" style="--r:40deg"></div><span class="mono">pitch</span></div><div><div class="knob" style="--r:-20deg"></div><span class="mono">comp</span></div></div>
+        </div>
+        <span class="mono">[editor]</span><h3>Edit the actual audio</h3>
+        <p>Varispeed, pitch, EQ, compressor, trims and fades. Every save is a new version, and older ones stay one tap away.</p>
+      </div>
+      <div class="card glass s4 rise">
+        <div class="viz listens">
+          <div><span class="av" style="background:#feda75">J</span> jay played <b>for the EP</b><span class="bar"><i style="width:92%"></i></span></div>
+          <div><span class="av" style="background:#d62976">M</span> maya commented at <span class="mono" style="color:#fff">1:12</span> "this switch up 🔥"</div>
+          <div><span class="av" style="background:#4f5bd5;color:#fff">A</span> anonymous played <b>late night idea</b><span class="bar"><i style="width:40%"></i></span></div>
+        </div>
+        <span class="mono">[sharing]</span><h3>Share with a link, see who listened</h3>
+        <p>Send a project or one track, with an optional password and expiry. Listeners leave comments at a moment in the song, and you get a notification.</p>
+      </div>
+      <div class="card glass s2 rise">
+        <div class="viz drop"><div class="row"><span>beat_v12.wav</span><span class="mono">38 MB</span></div><div class="prog"><i></i></div></div>
+        <span class="mono">[uploads]</span><h3>Drop it in</h3>
+        <p>From your computer, your phone, or AirDrop and iMessage through the share sheet.</p>
+      </div>
+      <div class="card glass s2 rise">
+        <div class="viz big">∞</div>
+        <span class="mono">[offline]</span><h3>Plays without signal</h3>
+        <p>Songs you play are kept on your device, so they load instantly and work offline.</p>
+      </div>
+      <div class="card glass s2 rise">
+        <div class="viz big" style="font-size:36px">● REC</div>
+        <span class="mono">[record]</span><h3>Catch the idea</h3>
+        <p>Record a voice memo straight into a project before it's gone.</p>
+      </div>
+      <div class="card glass s2 rise">
+        <div class="viz big">v3</div>
+        <span class="mono">[versions]</span><h3>Nothing gets lost</h3>
+        <p>Replace a bounce and keep the history. Switch back whenever you want.</p>
+      </div>
+    </div>
+  </section>
 
-<h2>Open source</h2>
-<p>[vault]'s code is public, so anyone can check exactly what it does: <a href="https://github.com/waaqef/vault">github.com/waaqef/vault</a>.</p>
+  <section id="drive">
+    <span class="mono">[your data]</span>
+    <h2>Your music lives in your own Google Drive.</h2>
+    <p class="lede">[vault] is invite-only. When you sign up, you connect Google Drive, and everything you upload is stored there, in your space and under your control. Here's exactly what [vault] can and can't do with that access.</p>
+    <div class="drive">
+      <div class="flow glass rise">
+        <div class="node"><span class="ic">[v]</span><div>[vault]<small>the app</small></div></div>
+        <div class="arrow">↓ drive.file permission only ↓</div>
+        <div class="node"><span class="ic">📁</span><div>Your “[vault]” folder<small>files [vault] created</small></div></div>
+        <div class="node dim"><span class="ic">🗂</span><div>Everything else in your Drive<small>never visible to [vault]</small></div></div>
+      </div>
+      <div class="uses glass rise">
+        <span class="mono">[what the access is used for]</span>
+        <ul>
+          <li>Upload the songs and cover art you add</li>
+          <li>Play, download and edit those files for you</li>
+          <li>Delete them when you delete them in [vault]</li>
+          <li>Show how much Drive space you have left, and which account is connected</li>
+          <li class="no">Never sold, never used for ads, never shared</li>
+          <li class="no">Can't see any file it didn't create</li>
+        </ul>
+        <p>Remove access any time from your <a href="https://myaccount.google.com/permissions">Google Account permissions</a>. The full details are in the <a href="/privacy">Privacy Policy</a>.</p>
+      </div>
+    </div>
+  </section>
 
-<footer><a href="/privacy">Privacy Policy</a><a href="/terms">Terms of Service</a><a href="https://github.com/waaqef/vault">Source code</a></footer>
+  <div class="oss glass rise">
+    <div><span class="mono">[open source · personal project]</span><h2>Made by one person, open to everyone.</h2><p>[vault] is a personal project, not a company. Its code is public, so you can read every line and check exactly what it does with your music.</p></div>
+    <a class="btn ghost" href="https://github.com/waaqef/vault">View on GitHub →</a>
+  </div>
+</main>
+
+<footer>
+  <span class="brand">[vault]</span>
+  <a href="/privacy">Privacy Policy</a>
+  <a href="/terms">Terms of Service</a>
+  <a href="https://github.com/waaqef/vault">Source code</a>
+  <a href="/">Sign in</a>
+</footer>
+
+<script>
+// The hero card's waveform: random bars, with the played part lighting up as it "plays".
+const wave = document.getElementById('wave'), t = document.getElementById('t'), N = 56, LEN = 168;
+const bars = Array.from({ length: N }, (_, i) => {
+  const b = document.createElement('i');
+  b.style.height = Math.round(18 + 82 * Math.abs(Math.sin(i * 1.7) * Math.cos(i * 0.31)) ** 0.8) + '%';
+  return wave.appendChild(b);
+});
+const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+let s = 38;
+const tick = () => {
+  bars.forEach((b, i) => b.classList.toggle('on', i / N < s / LEN));
+  t.textContent = `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+  s = (s + 1) % LEN;
+};
+tick(); if (!still) setInterval(tick, 1000);
+// Cards rise in as they scroll into view.
+const io = new IntersectionObserver(es => es.forEach(e => e.isIntersecting && (e.target.classList.add('in'), io.unobserve(e.target))), { threshold: .12 });
+document.querySelectorAll('.rise').forEach(el => io.observe(el));
+</script>
 </body></html>
