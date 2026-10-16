@@ -56,21 +56,20 @@ main { max-width: 1080px; margin: 0 auto; padding: 0 16px; }
 .kicker { display: inline-flex; gap: 8px; align-items: center; padding: 6px 12px; border-radius: 999px; }
 .kicker b { width: 6px; height: 6px; border-radius: 50%; background: #7dff9a; box-shadow: 0 0 10px #7dff9a; }
 h1 { font-size: clamp(44px, 7vw, 84px); line-height: .96; letter-spacing: -0.055em; font-weight: 650; margin: 22px 0 18px; }
-h1 em { font-style: normal; color: transparent; background: linear-gradient(100deg, #feda75, #fa7e1e 30%, #d62976 60%, #962fbf 80%, #4f5bd5); -webkit-background-clip: text; background-clip: text; }
 .sub { font-size: 18px; color: var(--fg-2); max-width: 30em; margin: 0 0 28px; }
 .ctas { display: flex; gap: 10px; flex-wrap: wrap; }
 
 /* the record and its now-playing card */
+.lib { position: absolute; top: 6%; left: 8%; right: 0; border-radius: 20px; padding: 14px 10px 10px; }
+.lib-h { display: flex; justify-content: space-between; padding: 0 8px 10px; }
+.tr { display: grid; grid-template-columns: 34px 1fr auto 34px; gap: 10px; align-items: center; padding: 8px; border-radius: 12px; font-size: 14px; }
+.tr.on { background: rgba(255,255,255,.07); }
+.tr .mono:last-child { text-align: right; }
+.art { width: 34px; height: 34px; border-radius: 8px; background: var(--grain) 0 0 / 140px, var(--g); }
+.a1 { --g: linear-gradient(135deg, #feda75, #fa7e1e); } .a2 { --g: linear-gradient(135deg, #fa7e1e, #d62976 55%, #4f5bd5); } .a3 { --g: linear-gradient(135deg, #3a3a3a, #777); } .a4 { --g: linear-gradient(135deg, #962fbf, #4f5bd5); }
 .stage { position: relative; aspect-ratio: 1; max-width: 480px; width: 100%; justify-self: center; }
-.disc { position: absolute; inset: 4%; border-radius: 50%; animation: spin 9s linear infinite;
-  background:
-    radial-gradient(circle at 50% 50%, #151515 0 11%, rgba(255,255,255,.4) 11.4% 12.6%, transparent 13%),
-    repeating-radial-gradient(circle at 50% 50%, rgba(0,0,0,.18) 0 1px, transparent 1px 4px),
-    conic-gradient(from 30deg, #2a2a2a, #6d6d6d 12%, #2e2e2e 25%, #8a8a8a 38%, #2b2b2b 52%, #5e5e5e 66%, #262626 80%, #7a7a7a 92%, #2a2a2a);
-  box-shadow: inset 0 0 0 1px rgba(255,255,255,.1), 0 40px 90px rgba(0,0,0,.6); }
-.disc::after { content: ""; position: absolute; inset: 0; border-radius: 50%; background: var(--grain) 0 0 / 140px; mix-blend-mode: overlay; }
 @keyframes spin { to { transform: rotate(360deg); } }
-.np { position: absolute; left: -6%; right: 14%; bottom: 2%; padding: 14px 16px 16px; border-radius: 20px; animation: float 7s ease-in-out infinite; }
+.np { position: absolute; left: -4%; right: 10%; bottom: 4%; padding: 14px 16px 16px; border-radius: 20px; animation: float 7s ease-in-out infinite; }
 @keyframes float { 50% { transform: translateY(-8px); } }
 .np-top { display: flex; align-items: center; gap: 12px; }
 .np-art { width: 42px; height: 42px; border-radius: 10px; flex: none; background: var(--grain) 0 0 / 140px, linear-gradient(135deg, #fa7e1e, #d62976 55%, #4f5bd5); }
@@ -80,9 +79,6 @@ h1 em { font-style: normal; color: transparent; background: linear-gradient(100d
 .wave i { flex: 1; border-radius: 2px; background: rgba(255,255,255,.26); min-height: 3px; transition: background .2s; }
 .wave i.on { background: #fff; }
 .np-time { display: flex; justify-content: space-between; }
-.chip { position: absolute; padding: 7px 12px; border-radius: 999px; font-size: 13px; display: flex; gap: 6px; align-items: center; white-space: nowrap; }
-.chip.c1 { top: 6%; right: -2%; animation: float 6s ease-in-out -2s infinite; }
-.chip.c2 { top: 36%; left: -10%; animation: float 8s ease-in-out -4s infinite; }
 
 /* sections */
 section { padding: 72px 0 8px; }
@@ -160,7 +156,6 @@ footer .brand { margin-right: auto; font-weight: 600; letter-spacing: -0.035em; 
   .s2, .s3, .s4 { grid-column: span 2; }
   .drive { grid-template-columns: 1fr; }
   nav .lnk { display: none; }
-  .chip.c2 { left: -2%; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
@@ -183,16 +178,20 @@ footer .brand { margin-right: auto; font-weight: 600; letter-spacing: -0.035em; 
   <header class="hero">
     <div>
       <span class="kicker glass mono"><b></b> open source · personal project</span>
-      <h1>Every <em>unfinished</em> song, kept safe.</h1>
-      <p class="sub">[vault] is an open-source personal project: a private, invite-only home for work-in-progress music. Store your beats, demos and ideas, play them anywhere, edit the audio, and share them with a link.</p>
+      <h1>[vault]</h1>
+      <p class="sub">An open-source personal project for storing and working on music projects, inspired by [untitled]. Upload beats, demos and ideas, play them on any device, edit the audio, and share them with a link. Invite only.</p>
       <div class="ctas"><a class="btn primary" href="/">Sign in</a><a class="btn ghost" href="/">Have an invite code?</a></div>
     </div>
     <div class="stage" aria-hidden="true">
-      <div class="disc"></div>
-      <div class="chip glass c1">🎧 <b>3</b> <span class="mono">listens today</span></div>
-      <div class="chip glass c2">★ <span class="mono">starred</span></div>
+      <div class="lib glass">
+        <div class="lib-h"><span class="mono">[trap ideas]</span><span class="mono">24 tracks</span></div>
+        <div class="tr"><span class="art a1"></span><span>late night idea</span><span class="mono">142 · F min</span><span class="mono">★</span></div>
+        <div class="tr on"><span class="art a2"></span><span>bounce v12</span><span class="mono">96 · A min</span><span class="mono">🎧 3</span></div>
+        <div class="tr"><span class="art a3"></span><span>hook voice memo</span><span class="mono">— · —</span><span class="mono"></span></div>
+        <div class="tr"><span class="art a4"></span><span>808 test</span><span class="mono">150 · C# min</span><span class="mono"></span></div>
+      </div>
       <div class="np glass">
-        <div class="np-top"><span class="np-art"></span><div style="min-width:0"><div class="np-t">late night idea (final final)</div><div class="mono">142 BPM · F min</div></div>
+        <div class="np-top"><span class="np-art"></span><div style="min-width:0"><div class="np-t">bounce v12</div><div class="mono">96 BPM · A min</div></div>
           <span class="np-play"><svg width="12" height="14" viewBox="0 0 12 14"><path d="M1 1v12l10-6z" fill="currentColor"/></svg></span></div>
         <div class="wave" id="wave"></div>
         <div class="np-time mono"><span id="t">0:00</span><span>2:48</span></div>
@@ -202,8 +201,8 @@ footer .brand { margin-right: auto; font-weight: 600; letter-spacing: -0.035em; 
 
   <section id="features">
     <span class="mono">[what it does]</span>
-    <h2>Built for the messy middle of making music.</h2>
-    <p class="lede">Not a streaming service and not a DAW. [vault] is where the bounces, the voice memos and the twelve versions of the same hook all live together.</p>
+    <h2>Features</h2>
+    
     <div class="grid">
       <div class="card glass s3 rise">
         <div class="viz tree">
@@ -238,22 +237,22 @@ footer .brand { margin-right: auto; font-weight: 600; letter-spacing: -0.035em; 
       </div>
       <div class="card glass s2 rise">
         <div class="viz drop"><div class="row"><span>beat_v12.wav</span><span class="mono">38 MB</span></div><div class="prog"><i></i></div></div>
-        <span class="mono">[uploads]</span><h3>Drop it in</h3>
+        <span class="mono">[uploads]</span><h3>Uploads</h3>
         <p>From your computer, your phone, or AirDrop and iMessage through the share sheet.</p>
       </div>
       <div class="card glass s2 rise">
         <div class="viz big">∞</div>
-        <span class="mono">[offline]</span><h3>Plays without signal</h3>
+        <span class="mono">[offline]</span><h3>Offline</h3>
         <p>Songs you play are kept on your device, so they load instantly and work offline.</p>
       </div>
       <div class="card glass s2 rise">
         <div class="viz big" style="font-size:36px">● REC</div>
-        <span class="mono">[record]</span><h3>Catch the idea</h3>
+        <span class="mono">[record]</span><h3>Record</h3>
         <p>Record a voice memo straight into a project before it's gone.</p>
       </div>
       <div class="card glass s2 rise">
         <div class="viz big">v3</div>
-        <span class="mono">[versions]</span><h3>Nothing gets lost</h3>
+        <span class="mono">[versions]</span><h3>Versions</h3>
         <p>Replace a bounce and keep the history. Switch back whenever you want.</p>
       </div>
     </div>
@@ -261,7 +260,7 @@ footer .brand { margin-right: auto; font-weight: 600; letter-spacing: -0.035em; 
 
   <section id="drive">
     <span class="mono">[your data]</span>
-    <h2>Your music lives in your own Google Drive.</h2>
+    <h2>Where your music is stored</h2>
     <p class="lede">[vault] is invite-only. When you sign up, you connect Google Drive, and everything you upload is stored there, in your space and under your control. Here's exactly what [vault] can and can't do with that access.</p>
     <div class="drive">
       <div class="flow glass rise">
@@ -286,7 +285,7 @@ footer .brand { margin-right: auto; font-weight: 600; letter-spacing: -0.035em; 
   </section>
 
   <div class="oss glass rise">
-    <div><span class="mono">[open source · personal project]</span><h2>Made by one person, open to everyone.</h2><p>[vault] is a personal project, not a company. Its code is public, so you can read every line and check exactly what it does with your music.</p></div>
+    <div><span class="mono">[open source · personal project]</span><h2>Open source</h2><p>[vault] is a personal project, not a company. The code is public on GitHub.</p></div>
     <a class="btn ghost" href="https://github.com/waaqef/vault">View on GitHub →</a>
   </div>
 </main>
