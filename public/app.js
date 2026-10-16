@@ -57,7 +57,10 @@ export function toast(msg, { error = false, ms = 3500, action, quiet = false } =
   const el = h('div', { className: 'toast' + (error ? ' error' : '') + (action ? ' has-action' : '') + (quiet ? ' quiet' : '') }, h('span', {}, msg),
     action && h('button', { className: 'toast-btn', onclick: () => { el.remove(); action.run(); } }, action.label));
   el.remove = () => { el.classList.add('out'); setTimeout(() => Element.prototype.remove.call(el), 200); };
-  $('#toasts').append(el);
+  const box = $('#toasts');
+  box.append(el);
+  // Toasts live in the top layer (a popover), re-raised each time so they sit above any open menu or dialog, not under its blur.
+  try { if (box.matches(':popover-open')) box.hidePopover(); box.showPopover(); } catch {}
   if (ms) setTimeout(() => el.remove(), ms);
   return el;
 }

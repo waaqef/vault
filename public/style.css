@@ -1277,3 +1277,5 @@ a.nav { text-decoration: none; color: inherit; }
 .share-links .item { flex-wrap: wrap; row-gap: 6px; flex-shrink: 0; }
 .share-links .item .grow { flex: 1 0 100%; }
 label small.people-note, .people-note { display: block; color: var(--fg-3); font-size: 12px; font-weight: 400; line-height: 1.45; margin-top: 4px; }
+/* toasts as a popover (top layer): undo the browser's popover box styling, keep our position */
+#toasts[popover] { right: auto; top: auto; margin: 0; padding: 0; border: 0; background: none; overflow: visible; color: inherit; height: auto; }
