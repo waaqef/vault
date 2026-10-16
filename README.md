@@ -2,7 +2,7 @@
 
 **Live:** https://vault.choseroxy.workers.dev/about
 
-Your own place for work-in-progress music: projects and folders, sorting by BPM, key and tags, share links that show who listened, an editor that writes changes into the file, offline listening, and voice-memo recording. It works on iPhone, PC and laptop, has no file limit, and costs $0.
+Your own place for work-in-progress music: projects and folders, sorting by BPM, key and tags, share links that show who listened, an editor that writes changes into the file, offline listening, and voice-memo recording. It works on iPhone, PC and laptop, has no editing limits, and costs $0.
 
 - **App + API:** a Cloudflare Worker (`worker.js`), free
 - **Library data:** Cloudflare D1 (`schema.sql`), free
