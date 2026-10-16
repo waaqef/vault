@@ -2,6 +2,8 @@
 
 **Live:** https://vault.choseroxy.workers.dev/about
 
+**Support:** [ko-fi.com/choseroxy](https://ko-fi.com/choseroxy) ☕
+
 **iPhone app:** [waaqef/vault-ios](https://github.com/waaqef/vault-ios) (a sideloadable `.ipa` with real haptics, background playback and downloads; [latest build](https://github.com/waaqef/vault-ios/releases/download/latest/vault.ipa))
 
 Your own place for work-in-progress music: projects and folders, sorting by BPM, key and tags, share links that show who listened, an editor that writes changes into the file, offline listening, and voice-memo recording. It works on iPhone, PC and laptop, has no editing limits, and costs $0.
