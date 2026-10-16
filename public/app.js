@@ -1889,6 +1889,10 @@ async function shareDialog(kind, target_id, name) {
       h('button', { type: 'button', className: 'btn ghost', title: 'Who listened', onclick: () => listensDialog(s.token) }, icon('headphones', 14), String(s.listens)),
       !s.revoked && h('button', { type: 'button', className: 'btn', onclick: () => copy(s.token) }, 'Copy'),
       h('button', { type: 'button', className: 'btn ghost', onclick: () => api(`/shares/${s.token}`, { method: 'PATCH', body: { revoked: !s.revoked } }).then(refresh, oops) }, s.revoked ? 'Turn on' : 'Turn off'),
+      h('button', { type: 'button', className: 'icon-btn sm', 'aria-label': 'Delete link', title: 'Delete link', async onclick() {
+        if (!(await confirm('Delete this link?', 'It stops working, disappears from the libraries of anyone who saved it, and its listen stats are deleted. Comments stay on the tracks.', 'Delete'))) return;
+        api(`/shares/${s.token}`, { method: 'DELETE' }).then(refresh, oops);
+      } }, icon('trash', 14)),
     )) : [h('div', { className: 'muted' }, 'No links yet.')]));
   }
   const d = dialog(h('form', {

@@ -641,6 +641,16 @@ on('PATCH', '/api/shares/:token', async (req, env, b, { token }, url, ctx, u) =>
   if ('public' in b) await env.DB.prepare('UPDATE shares SET public = ? WHERE token = ?').bind(b.public ? 1 : 0, token).run();
   return json({ ok: true });
 });
+// Delete a link for good: it stops working, drops out of people's libraries, and its listen stats go. Comments stay on the tracks.
+on('DELETE', '/api/shares/:token', async (req, env, b, { token }, url, ctx, u) => {
+  if (!(await ownShare(env, u, token))) return fail('Not found', 404);
+  await env.DB.batch([
+    env.DB.prepare('DELETE FROM saved_shares WHERE token = ?').bind(token),
+    env.DB.prepare('DELETE FROM listens WHERE share_token = ?').bind(token),
+    env.DB.prepare('DELETE FROM shares WHERE token = ?').bind(token),
+  ]);
+  return json({ ok: true });
+});
 on('GET', '/api/shares/:token/listens', async (req, env, b, { token }, url, ctx, u) => {
   if (!(await ownShare(env, u, token))) return fail('Not found', 404);
   return json((await env.DB.prepare('SELECT l.listener_name, l.at, l.seconds, l.duration, l.track_id, t.name AS track FROM listens l LEFT JOIN tracks t ON t.id = l.track_id WHERE share_token = ? ORDER BY at DESC LIMIT 1000').bind(token).all()).results);
