@@ -376,7 +376,42 @@ function setSort(v) { const k = S.view.type === 'project' ? 'projectSort' : 'sor
 const tagsOf = t => (t.tags || '').split(',').map(s => s.trim()).filter(Boolean);
 const filterCount = () => Object.values(S.filter).filter(Boolean).length;
 
+// The background wash takes its colours from the cover of the project you're in; anywhere else (or no cover) it's
+// the default pastel palette. Colours are picked once per cover from a 32px copy: the strongest hues, by saturation.
+const tintCache = new Map();
+let tintKey = null;
+function tintFrom(key) {
+  if (key === tintKey) return;
+  tintKey = key;
+  const holo = $('#holo i');
+  const apply = colors => {
+    if (tintKey !== key || !holo) return;
+    document.documentElement.classList.toggle('cover-tint', !!colors);
+    if (!colors) return holo.style.removeProperty('--holo');
+    const spots = [['42% 38% at 12% 18%', .1], ['46% 40% at 88% 12%', .1], ['50% 46% at 72% 88%', .085], ['42% 42% at 18% 86%', .09], ['36% 30% at 50% 50%', .045]];
+    holo.style.setProperty('--holo', spots.map(([at, a], i) => `radial-gradient(${at}, rgba(${colors[i % colors.length]},${a}), transparent 70%)`).join(', '));
+  };
+  if (!key) return apply(null);
+  if (!tintCache.has(key)) tintCache.set(key, (async () => {
+    const img = await loadImg(await (await fetch(coverUrl(key))).blob());
+    const c = h('canvas', { width: 32, height: 32 }), g = c.getContext('2d', { willReadFrequently: true });
+    g.drawImage(img, 0, 0, 32, 32);
+    const px = g.getImageData(0, 0, 32, 32).data, bins = Array.from({ length: 12 }, () => ({ w: 0, r: 0, g: 0, b: 0 }));
+    for (let i = 0; i < px.length; i += 4) {
+      const [r, gr, b] = [px[i], px[i + 1], px[i + 2]], mx = Math.max(r, gr, b), mn = Math.min(r, gr, b), sat = mx ? (mx - mn) / mx : 0;
+      if (mx < 40 || sat < 0.18) continue; // skip near-black and greys
+      const hue = mx === mn ? 0 : mx === r ? ((gr - b) / (mx - mn) + 6) % 6 : mx === gr ? (b - r) / (mx - mn) + 2 : (r - gr) / (mx - mn) + 4;
+      const bin = bins[Math.floor(hue * 2) % 12], w = sat * (mx / 255);
+      bin.w += w; bin.r += r * w; bin.g += gr * w; bin.b += b * w;
+    }
+    const top = bins.filter(x => x.w > 0.5).sort((x, y) => y.w - x.w).slice(0, 4).map(x => [x.r, x.g, x.b].map(v => Math.round(v / x.w)).join(','));
+    return top.length ? top : null; // a black-and-white cover keeps the default palette
+  })().catch(() => null));
+  tintCache.get(key).then(apply);
+}
+
 function renderMain() {
+  tintFrom(S.view.type === 'project' ? projectOf(S.view.id)?.cover || null : null);
   const main = $('#main');
   if (S.view.type === 'trash') { renderBulk(); return renderTrash(); }
   const p = S.view.type === 'project' && projectOf(S.view.id);

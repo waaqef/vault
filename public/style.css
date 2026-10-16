@@ -1316,3 +1316,6 @@ dialog label { grid-template-columns: minmax(0, 1fr); }
    and none at all on touch screens; keyboards on computers still get rings on buttons */
 dialog:focus, dialog:focus-visible { outline: none !important; } /* beats the refined look's accent focus ring */
 @media (pointer: coarse) { dialog :focus, dialog :focus-visible { outline: none !important; } }
+/* a cover's own colours: keep them (no hue cycling), keep the slow drift */
+:root.glassy.cover-tint #holo i { animation: holo-drift 40s ease-in-out infinite alternate; filter: saturate(140%) brightness(1.4); }
+:root.glassy #holo i { transition: opacity .6s ease; }
