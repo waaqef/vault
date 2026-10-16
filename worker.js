@@ -952,6 +952,8 @@ export default {
     const path = url.pathname;
     try {
       if (!env.APP_PASSWORD) return fail('Set the APP_PASSWORD secret first (see README)', 500);
+      // Google Search Console ownership check (served as-is; the asset server would redirect away from .html)
+      if (path === '/google6e583667ce62f72e.html') return new Response('google-site-verification: google6e583667ce62f72e.html', { headers: { 'content-type': 'text/html; charset=utf-8' } });
       if (path.startsWith('/s/')) return await handleShare(req, env, url, ctx);
       if (path.startsWith('/blob/') && env.LOCAL) return await localBlob(req, env, path.slice(6));
       if (!path.startsWith('/api/')) return env.ASSETS.fetch(req);
