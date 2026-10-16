@@ -1,0 +1,9 @@
+# Public pages only. The app, its API and private share links stay out of search results.
+User-agent: *
+Allow: /about
+Allow: /privacy
+Allow: /terms
+Disallow: /api/
+Disallow: /s/
+
+Sitemap: https://vault.choseroxy.workers.dev/sitemap.xml
