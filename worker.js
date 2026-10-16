@@ -996,6 +996,15 @@ async function previewFile(env, req, t, owner) {
   return new Response(r.body, { status: m ? 206 : 200, headers });
 }
 
+// Email the admin through Resend (free: 100 a day). Only once RESEND_API_KEY and NOTIFY_EMAIL are set (node setup.mjs email).
+// Resend's shared sender can only email the address the Resend account was made with, which is all this needs.
+async function emailAdmin(env, subject, text) {
+  if (!env.RESEND_API_KEY || !env.NOTIFY_EMAIL) return;
+  await fetch('https://api.resend.com/emails', { method: 'POST',
+    headers: { authorization: `Bearer ${env.RESEND_API_KEY}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ from: '"[vault]" <onboarding@resend.dev>', to: [env.NOTIFY_EMAIL], subject, text }) }).catch(() => {});
+}
+
 // Ask the admin for an invite (from the sign-up screen, or a share page's sign-in card). A few per address, then a wait.
 async function requestInvite(req, env, ctx, url, token = null) {
   const lockKey = 'request:' + clientIp(req), wait = await lockedFor(env, lockKey);
@@ -1006,6 +1015,15 @@ async function requestInvite(req, env, ctx, url, token = null) {
   await recordFail(env, lockKey);
   await env.DB.prepare('INSERT INTO access_requests (share_token, name, contact, message, created_at) VALUES (?, ?, ?, ?, ?)')
     .bind(token, name, String(b.contact || '').trim().slice(0, 200), String(b.message || '').trim().slice(0, 500), now()).run();
+  const contact = String(b.contact || '').trim(), note = String(b.message || '').trim();
+  ctx?.waitUntil?.(emailAdmin(env, `${name} wants an invite to [vault]`,
+    `${name} asked for an invite ${token ? 'from a share link' : 'from the sign-up screen'}.
+
+How to reach them: ${contact || '(not given)'}
+Note: ${note || '(none)'}
+
+Make a code in [vault]: profile picture → People → New invite code.
+${url.origin}/`));
   notify(ctx, env, OWNER, { title: `${name} wants an invite to [vault]`, body: String(b.message || b.contact || (token ? 'From a share link' : 'From the sign-up screen')).slice(0, 200), tag: 'request', url: '/' }, url.origin);
   return json({ ok: true });
 }
