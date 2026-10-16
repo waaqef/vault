@@ -63,7 +63,8 @@ export function toast(msg, { error = false, ms = 3500, action, quiet = false } =
 }
 const oops = e => e.message !== 'Not logged in' && toast(e.message, { error: true, ms: 6000 });
 
-function dialog(content, { className = '' } = {}) {
+// locked: can't be closed by Escape or clicking outside (login, Connect Drive, first project)
+function dialog(content, { className = '', locked = false } = {}) {
   const d = h('dialog', { className }, content);
   d.addEventListener('close', () => d.remove());
   const nativeClose = d.close.bind(d);
@@ -76,9 +77,9 @@ function dialog(content, { className = '' } = {}) {
     setTimeout(finish, 360); // in case the animation never runs
   };
   // Escape: animate out too (the editor handles Escape itself, to ask before discarding)
-  d.addEventListener('cancel', e => { if (!className.includes('editor')) { e.preventDefault(); d.close(); } });
+  d.addEventListener('cancel', e => { if (locked) e.preventDefault(); else if (!className.includes('editor')) { e.preventDefault(); d.close(); } });
   d.addEventListener('click', e => {
-    if (e.target !== d || className.includes('editor')) return;
+    if (e.target !== d || locked || className.includes('editor')) return;
     const r = d.getBoundingClientRect();
     if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) d.close(); // backdrop click
   });
@@ -164,8 +165,7 @@ async function load() {
 function showLogin() {
   if ($('#login')) return;
   const box = h('div', { id: 'login', className: 'login' });
-  const d = dialog(box);
-  d.addEventListener('cancel', e => e.preventDefault());
+  const d = dialog(box, { locked: true });
   const head = h('div', { className: 'disc', style: { width: '56px', height: '56px', justifySelf: 'center', animation: 'spin 14s linear infinite' } });
   const field = (type, auto, extra = {}) => h('input', { type, autocomplete: auto, autocapitalize: 'none', spellcheck: false, ...extra });
   const err = () => h('p', { className: 'form-err' });
@@ -221,7 +221,7 @@ function showLogin() {
 }
 // Step 3 of sign-up (and shown on sign-in until it's done): connect Google Drive, where this account's music is kept.
 function driveStep(box, d) {
-  if (!box) { if ($('#login')) return; box = h('div', { id: 'login', className: 'login' }); d = dialog(box); d.addEventListener('cancel', e => e.preventDefault()); }
+  if (!box) { if ($('#login')) return; box = h('div', { id: 'login', className: 'login' }); d = dialog(box, { locked: true }); }
   fill(box, h('div', { className: 'stack' }, h('div', { className: 'brandmark' }, '[connect drive]'),
     h('p', { className: 'muted', style: { margin: 0 } }, 'Your music is stored in your own Google Drive, in a folder called [vault]. The app can only see files it puts there, nothing else in your Drive.'),
     h('a', { className: 'btn primary', href: '/api/drive/connect', style: { width: '100%', height: '42px', display: 'grid', placeItems: 'center' } }, 'Connect Google Drive'),
@@ -851,8 +851,7 @@ function firstProject() {
     } }, h('h2', {}, 'Make your first project'),
     h('p', { className: 'muted', style: { margin: 0 } }, 'Projects hold your tracks, like an album or a folder of ideas. You can make more any time.'),
     cover, h('label', {}, 'Name', name), err,
-    h('button', { className: 'btn primary', style: { width: '100%', height: '42px' } }, 'Create project')));
-    d.addEventListener('cancel', e => e.preventDefault());
+    h('button', { className: 'btn primary', style: { width: '100%', height: '42px' } }, 'Create project')), { locked: true });
     if (matchMedia("(pointer: fine)").matches) name.focus(); // no keyboard popping up on phones
   }));
 }
@@ -2116,12 +2115,13 @@ async function peopleDialog() {
   const copy = async text => { try { await navigator.clipboard.writeText(text); toast('Copied', { ms: 1200 }); } catch { prompt('Copy this', text, { label: 'Code', ok: 'Done' }); } };
   async function draw() {
     const [users, invites] = await Promise.all([api('/admin/users'), api('/admin/invites')]).catch(e => (oops(e), [[], []]));
-    const open = invites.filter(i => !i.used_by);
+    const open = invites;
     fill(box,
       h('div', { className: 'set-sec' }, h('h3', {}, '[invite codes]'),
         h('p', { className: 'muted', style: { margin: 0 } }, 'Each code makes one account. Send it to someone, and they choose “Sign up” on the login screen.'),
-        open.map(i => h('div', { className: 'set-row' }, h('div', { className: 't' }, h('code', { className: 'mono' }, i.code), h('small', {}, `Made ${fmtAdded(i.created_at).toLowerCase()}`)),
-          h('span', { className: 'btns', style: { margin: 0 } }, h('button', { className: 'btn', onclick: () => copy(i.code) }, 'Copy'),
+        open.map(i => h('div', { className: 'set-row' + (i.used_by ? ' used' : '') }, h('div', { className: 't' }, h('code', { className: 'mono' }, i.code),
+            h('small', {}, i.used_by ? `Used by ${i.used_by} · ${fmtAdded(i.used_at).toLowerCase()}` : `Not used yet · made ${fmtAdded(i.created_at).toLowerCase()}`)),
+          h('span', { className: 'btns', style: { margin: 0 } }, !i.used_by && h('button', { className: 'btn', onclick: () => copy(i.code) }, 'Copy'),
             h('button', { className: 'btn danger', async onclick() { await api(`/admin/invites/${i.code}`, { method: 'DELETE' }).catch(oops); draw(); } }, 'Delete')))),
         h('button', { className: 'btn', async onclick() { const { code } = await api('/admin/invites', { method: 'POST' }).catch(oops) || {}; if (code) await copy(code); draw(); } }, icon('plus', 14), 'New invite code')),
       h('div', { className: 'set-sec' }, h('h3', {}, '[accounts]'),
