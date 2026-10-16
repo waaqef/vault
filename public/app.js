@@ -1591,9 +1591,23 @@ async function playAt(i, { remember = true } = {}) {
   audio.play().catch(() => {});
   renderPlayer(); markPlaying();
   if ('mediaSession' in navigator) {
-    const art = coverOf(cur);
-    navigator.mediaSession.metadata = new MediaMetadata({ title: cur.name, artist: cur.artist || projectOf(cur.project_id)?.name || '', artwork: art ? [{ src: coverUrl(art), sizes: '1000x1000', type: 'image/jpeg' }] : [] });
+    const t = cur, art = coverOf(t), meta = artwork => new MediaMetadata({ title: t.name, artist: t.artist || projectOf(t.project_id)?.name || '', artwork });
+    navigator.mediaSession.metadata = meta([]);
+    lockScreenArt(art).then(a => { if (cur === t && a.length) navigator.mediaSession.metadata = meta(a); });
   }
+}
+// Lock screen / Now Playing cover. The phone fetches artwork itself, without the login cookie, so a protected cover URL
+// fails and it shows the app icon. Instead the page loads the cover (logged in) and hands over a small copy as a data URL.
+const artCache = new Map();
+function lockScreenArt(key) {
+  if (!key) return Promise.resolve([]);
+  if (!artCache.has(key)) artCache.set(key, (async () => {
+    const img = await loadImg(await (await fetch(coverUrl(key))).blob());
+    const n = Math.min(img.naturalWidth, img.naturalHeight), c = h('canvas', { width: 512, height: 512 });
+    c.getContext('2d').drawImage(img, (img.naturalWidth - n) / 2, (img.naturalHeight - n) / 2, n, n, 0, 0, 512, 512);
+    return [{ src: c.toDataURL('image/jpeg', 0.85), sizes: '512x512', type: 'image/jpeg' }];
+  })().catch(() => []));
+  return artCache.get(key);
 }
 function nextIndex() {
   if (P.shuffle && P.pick?.from === qi && P.pick.len === queue.length && P.pick.to < queue.length) return P.pick.to;
