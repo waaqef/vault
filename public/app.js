@@ -124,7 +124,7 @@ function pickFiles(accept, multiple = true) {
 // ---- state ----------------------------------------------------------------------
 const S = {
   folders: [], projects: [], tracks: [], usage: 0, limit: 10e9, online: true,
-  view: { type: 'home' }, homeFolder: null, sort: store.get('sort', 'newest'), q: '', tag: '',
+  view: { type: 'home' }, homeFolder: null, sort: store.get('sort', 'newest'), projectSort: store.get('projectSort', 'manual'), q: '', tag: '',
   open: new Set(store.get('open', [])), offline: new Set(store.get('offline', [])),
   filter: blankFilter(), select: null, trash: 0, comments: {}, sharedProjects: [], sharedTracks: [],
 };
@@ -361,9 +361,11 @@ function visibleTracks() {
     key: (a, b) => (KEYS.indexOf(a.musical_key) + 1 || 99) - (KEYS.indexOf(b.musical_key) + 1 || 99),
     length: (a, b) => (a.duration ?? 0) - (b.duration ?? 0),
   };
-  const sort = S.view.type !== 'project' && S.sort === 'manual' ? 'newest' : S.sort;
-  return list.sort(by[sort] || by.newest);
+  return list.sort(by[effSort()] || by.newest);
 }
+// Inside a project the order is its own setting (Custom, the arranged order, by default); everywhere else Newest.
+const effSort = () => (S.view.type === 'project' ? S.projectSort : S.sort === 'manual' ? 'newest' : S.sort);
+function setSort(v) { const k = S.view.type === 'project' ? 'projectSort' : 'sort'; S[k] = v; store.set(k, v); }
 const tagsOf = t => (t.tags || '').split(',').map(s => s.trim()).filter(Boolean);
 const filterCount = () => Object.values(S.filter).filter(Boolean).length;
 
@@ -386,9 +388,9 @@ function renderMain() {
       } })),
     S.view.type !== 'home' && h('button', { className: 'btn' + (fc ? ' on' : ''), 'aria-label': fc ? `Filters, ${fc} on` : 'Filter', onclick: filterDialog },
       icon('filter', 16), h('span', { className: 'lbl' }, 'Filter'), fc > 0 && h('span', { className: 'badge num' }, fc)),
-    S.view.type !== 'home' && h('select', { 'aria-label': 'Sort', onchange(e) { S.sort = e.target.value; store.set('sort', S.sort); renderList(true); } },
+    S.view.type !== 'home' && h('select', { 'aria-label': 'Sort', onchange(e) { setSort(e.target.value); renderList(true); } },
       [['manual', 'Custom'], ['newest', 'Newest'], ['oldest', 'Oldest'], ['name', 'Name'], ['bpm', 'BPM'], ['key', 'Key'], ['length', 'Length']]
-        .filter(([v]) => p || v !== 'manual').map(([v, l]) => h('option', { value: v, selected: S.sort === v }, l))),
+        .filter(([v]) => p || v !== 'manual').map(([v, l]) => h('option', { value: v, selected: effSort() === v }, l))),
     h('span', { className: 'grow' }),
     h('button', { className: 'btn', onclick: recordDialog, disabled: !S.online || ro, 'aria-label': 'Record' }, icon('mic', 16), h('span', { className: 'lbl' }, 'Record')),
     h('button', { className: 'btn primary', disabled: !S.online || ro, title: ro ? 'You can listen to this project, not add to it' : null, async onclick() { const f = await pickFiles(ACCEPT_AUDIO); f.length && uploadTracks(f, await targetProject()); }, 'aria-label': 'Upload' }, icon('upload', 16), h('span', { className: 'lbl' }, 'Upload')),
@@ -406,7 +408,7 @@ function renderMain() {
     !busy && list.length > 1 && h('button', { className: 'btn', 'aria-label': 'Shuffle', onclick: () => playList(list, Math.floor(Math.random() * list.length), { shuffle: true }) }, labelled('shuffle', 'Shuffle')),
     p && !ro && !busy && list.length > 1 && h('button', { className: 'btn', 'aria-label': 'Rearrange', onclick: () => {
       S.arrange = true;
-      if (S.sort !== 'manual') { S.sort = 'manual'; store.set('sort', 'manual'); }
+      if (S.projectSort !== 'manual') setSort('manual');
       renderMain();
     } }, labelled('grip', 'Rearrange')),
     !shared && !busy && list.length > 0 && h('button', { className: 'btn', 'aria-label': 'Select tracks', onclick: () => { S.select = new Set(); renderMain(); } }, labelled('check', 'Select')),
@@ -505,7 +507,7 @@ function renderList(animate = false) {
   if (!box) return;
   const list = visibleTracks();
   const p = S.view.type === 'project';
-  const manual = p && S.sort === 'manual';
+  const manual = p && S.projectSort === 'manual';
   box.classList.remove('stagger');
   box.classList.toggle('arranging', !!S.arrange && p);
   box.classList.toggle('selecting', !!S.select);
@@ -1220,7 +1222,7 @@ async function handleDrop(dt, projectId) {
 
 // ---- tracks -----------------------------------------------------------------------------
 function trackMenu(t, list) {
-  const manual = S.view.type === 'project' && S.sort === 'manual';
+  const manual = S.view.type === 'project' && S.projectSort === 'manual';
   const i = list.indexOf(t);
   const move = d => { const ids = list.map(x => x.id); ids.splice(i, 1); ids.splice(i + d, 0, t.id); reorder(ids); };
   const ed = canEdit(t.project_id), own = !isShared(t.project_id); // shared tracks: viewers listen, editors change them
