@@ -264,7 +264,7 @@ dialog[open] { animation: pop .28s var(--ease); }
 dialog::backdrop { background: rgba(0,0,0,.55); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); }
 dialog[open]::backdrop { animation: fade .25s ease; }
 dialog h2 { margin: 0 0 18px; font-size: 20px; font-weight: 500; letter-spacing: -0.03em; }
-dialog form, .stack { display: grid; gap: 14px; }
+dialog form, .stack { display: grid; gap: 14px; grid-template-columns: minmax(0, 1fr); } /* never wider than the pop-up */
 dialog label { display: grid; gap: 6px; font-family: var(--mono); font-size: 11px; color: var(--fg-3); }
 dialog label > :not(.list) { font-family: var(--sans); font-size: 14px; color: var(--fg); }
 dialog input[type=text], dialog input[type=password], dialog input[type=number], dialog select { border-radius: 12px; }
@@ -1283,13 +1283,13 @@ label small.people-note, .people-note { display: block; color: var(--fg-3); font
 /* ---- phones: pop-ups are compact floating cards, not full-screen panels ----
    A little gap all round, rounded on every corner, tighter padding and type, and menus cap their height and scroll. */
 @media (max-width: 760px) {
-  dialog:not(.editor):not(.fsplayer) { width: calc(100vw - 20px); max-width: 460px; padding: 18px 16px; border-radius: 20px; max-height: calc(100dvh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); }
+  dialog:not(.editor):not(.fsplayer) { width: calc(100vw - 20px); max-width: 460px; padding: 18px 16px; border-radius: 20px; max-height: 78dvh; margin: auto; } /* centred, and never the whole screen */
   dialog:not(.editor):not(.fsplayer) h2 { font-size: 18px; margin-bottom: 12px; }
   dialog form, .stack { gap: 11px; }
-  dialog.sheet:not(.editor):not(.fsplayer) { width: calc(100vw - 20px); max-width: 400px; margin: auto auto calc(10px + env(safe-area-inset-bottom)); padding: 5px; border-radius: 20px; max-height: 64dvh; overflow-y: auto; }
+  dialog.sheet:not(.editor):not(.fsplayer) { width: calc(100vw - 20px); max-width: 400px; margin: auto; padding: 5px; border-radius: 20px; max-height: 64dvh; overflow-y: auto; }
   .sheet button { padding: 9px 12px; font-size: 15px; gap: 11px; min-height: 0; }
   .sheet hr, .sheet .sep { margin: 3px 10px; }
-  dialog.settings-dlg:not(.editor):not(.fsplayer) { width: calc(100vw - 20px); max-width: 520px; margin: auto auto calc(10px + env(safe-area-inset-bottom)); max-height: 82dvh; border-radius: 20px; padding: 18px 14px 14px; }
+  dialog.settings-dlg:not(.editor):not(.fsplayer) { width: calc(100vw - 20px); max-width: 520px; margin: auto; max-height: 78dvh; border-radius: 20px; padding: 18px 14px 14px; }
   .set-row { min-height: 44px; padding: 8px 10px 8px 12px; gap: 10px; font-size: 14px; }
   .set-row small { font-size: 12px; }
   .set-sec { gap: 5px; }
@@ -1303,3 +1303,12 @@ label small.people-note, .people-note { display: block; color: var(--fg-3); font
 .inbox-item { width: 100%; text-align: left; border: 0; color: var(--fg); cursor: pointer; align-items: flex-start; padding: 10px 12px; }
 .inbox-item.unread { box-shadow: inset 3px 0 0 var(--fg); }
 .inbox-item .muted { font-size: 13px; margin-top: 2px; }
+/* labels that hold a whole section (People with access…) also stay inside the pop-up; their pickers don't stretch */
+dialog label { grid-template-columns: minmax(0, 1fr); }
+.people-add select, .item select { width: auto; flex: none; max-width: 55%; }
+.item .grow { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* phones: centred pop-ups open and close with the same pop as on a computer (not a slide from the bottom) */
+@media (max-width: 760px) {
+  dialog.sheet[open], dialog.settings-dlg[open] { animation: pop .28s var(--ease); }
+  dialog.sheet.closing, dialog.settings-dlg.closing { animation: pop-out .19s var(--ease) forwards !important; }
+}

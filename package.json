@@ -3,6 +3,7 @@
   "scripts": {
     "dev:local": "wrangler dev --env local",
     "db:local": "wrangler d1 execute vault --local --env local --file=schema.sql",
+    "predeploy": "node test.mjs",
     "deploy": "wrangler deploy --env=\"\"",
     "db:remote": "wrangler d1 execute vault --remote --env=\"\" --file=schema.sql",
     "test": "node test.mjs",
