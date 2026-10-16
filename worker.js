@@ -775,19 +775,13 @@ on('POST', '/api/drive/disconnect', async (req, env, b, p, url, ctx, u) => {
 // ---- admin: invites and people ----
 const adminOnly = u => (u.is_admin ? null : fail('Only the admin can do that', 403));
 on('GET', '/api/admin/invites', async (req, env, b, p, url, ctx, u) =>
-  adminOnly(u) || json((await env.DB.prepare('SELECT i.code, i.created_at, i.used_at, i.disabled, x.username AS used_by FROM invites i LEFT JOIN users x ON x.id = i.used_by ORDER BY i.created_at DESC LIMIT 100').all()).results));
+  adminOnly(u) || json((await env.DB.prepare('SELECT i.code, i.created_at, i.used_at, x.username AS used_by FROM invites i LEFT JOIN users x ON x.id = i.used_by ORDER BY i.created_at DESC LIMIT 100').all()).results));
 on('POST', '/api/admin/invites', async (req, env, b, p, url, ctx, u) => {
   if (adminOnly(u)) return adminOnly(u);
   const abc = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789', bytes = crypto.getRandomValues(new Uint8Array(8));
   const code = [...bytes].map(x => abc[x % abc.length]).join('').replace(/(.{4})/, '$1-');
   await env.DB.prepare('INSERT INTO invites (code, created_by, created_at) VALUES (?, ?, ?)').bind(code, u.id, now()).run();
   return json({ code });
-});
-// Turn a code off (it stops working for sign-up) or back on.
-on('PATCH', '/api/admin/invites/:code', async (req, env, b, { code }, url, ctx, u) => {
-  if (adminOnly(u)) return adminOnly(u);
-  await env.DB.prepare('UPDATE invites SET disabled = ? WHERE code = ?').bind(b.disabled ? 1 : 0, code).run();
-  return json({ ok: true });
 });
 on('DELETE', '/api/admin/invites/:code', async (req, env, b, { code }, url, ctx, u) => {
   if (adminOnly(u)) return adminOnly(u);
@@ -872,7 +866,7 @@ async function signup(req, env) {
   const b = await req.json().catch(() => ({}));
   const code = String(b.invite || '').trim().toUpperCase();
   const invite = code && await env.DB.prepare('SELECT * FROM invites WHERE code = ?').bind(code).first();
-  if (!invite || invite.used_by || invite.disabled) { await recordFail(env, lockKey); return fail(!invite ? "That invite code doesn't exist" : invite.used_by ? 'That invite code was already used' : 'That invite code was turned off', 400); }
+  if (!invite || invite.used_by) { await recordFail(env, lockKey); return fail(invite ? 'That invite code was already used' : "That invite code doesn't exist", 400); }
   if (b.checkOnly) return json({ ok: true }); // step 1 of sign-up just checks the code
   const name = String(b.username || '').trim().toLowerCase();
   if (!USERNAME_RE.test(name)) return fail('Usernames are 3–24 letters, numbers, dots, dashes or underscores.');
@@ -880,7 +874,7 @@ async function signup(req, env) {
   if (!b.password || String(b.password).length < 8) return fail('Use at least 8 characters for your password.');
   if (b.avatar && !AVATAR_RE.test(b.avatar)) return fail('That picture didn\'t work. Try another one.');
   const id = uid(), salt = uid();
-  const claimed = await env.DB.prepare('UPDATE invites SET used_by = ?, used_at = ? WHERE code = ? AND used_by IS NULL AND disabled = 0').bind(id, now(), code).run();
+  const claimed = await env.DB.prepare('UPDATE invites SET used_by = ?, used_at = ? WHERE code = ? AND used_by IS NULL').bind(id, now(), code).run();
   if (!claimed.meta.changes) return fail('That invite code was just used');
   await env.DB.prepare("INSERT INTO users (id, username, pass_salt, pass_hash, is_admin, avatar, storage, session, created_at) VALUES (?, ?, ?, ?, 0, ?, 'drive', ?, ?)")
     .bind(id, name, salt, await passHash(env, salt, String(b.password)), b.avatar || null, uid(), now()).run();
