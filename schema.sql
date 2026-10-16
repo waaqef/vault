@@ -52,3 +52,4 @@ INSERT OR IGNORE INTO users (id, username, is_admin, storage, created_at) VALUES
 CREATE INDEX IF NOT EXISTS projects_owner ON projects (owner_id);
 CREATE INDEX IF NOT EXISTS folders_owner ON folders (owner_id);
 CREATE INDEX IF NOT EXISTS versions_key ON track_versions (file_key);
+CREATE TABLE IF NOT EXISTS saved_shares (user_id TEXT NOT NULL, token TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (user_id, token));

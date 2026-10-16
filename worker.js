@@ -222,6 +222,15 @@ async function purgeOldTrash(env) {
   for (const r of t.results) await deleteTrack(env, r.id);
 }
 
+// Shared projects/tracks saved to a library: only while the link still works.
+const SAVED = `SELECT s.token, s.kind, COALESCE(p.name, t.name) AS name, COALESCE(p.cover, t.cover, tp.cover) AS cover, u.username AS owner
+  FROM saved_shares v JOIN shares s ON s.token = v.token
+  LEFT JOIN projects p ON s.kind = 'project' AND p.id = s.target_id AND p.deleted_at IS NULL
+  LEFT JOIN tracks t ON s.kind = 'track' AND t.id = s.target_id AND t.deleted_at IS NULL
+  LEFT JOIN projects tp ON tp.id = t.project_id AND tp.deleted_at IS NULL
+  JOIN users u ON u.id = COALESCE(p.owner_id, tp.owner_id)
+  WHERE v.user_id = ? AND s.revoked = 0 AND (s.expires_at IS NULL OR s.expires_at > ?) ORDER BY v.created_at DESC`;
+
 const liveTracks = `deleted_at IS NULL AND project_id IN (SELECT id FROM projects WHERE deleted_at IS NULL AND owner_id = ?)`;
 
 on('GET', '/api/tree', async (req, env, b, p, url, ctx, u) => {
@@ -235,7 +244,8 @@ on('GET', '/api/tree', async (req, env, b, p, url, ctx, u) => {
   ]);
   const comments = Object.fromEntries(cm.results.map(r => [r.track_id, r.n]));
   const s = await space(env, u);
-  return json({ folders: f.results, projects: pr.results, tracks: t.results, comments, trash: tr.results[0].n,
+  const saved = (await env.DB.prepare(SAVED).bind(u.id, now()).all()).results;
+  return json({ folders: f.results, projects: pr.results, tracks: t.results, comments, trash: tr.results[0].n, saved,
     usage: s.usage, limit: s.limit, me: publicUser(u, { driveEmail: s.email || '', needsDrive: usesDrive(env, u) && !u.drive_refresh }) });
 });
 
@@ -705,21 +715,35 @@ on('PATCH', '/api/admin/users/:id', async (req, env, b, { id }, url, ctx, u) => 
   if ('disabled' in b) await env.DB.prepare('UPDATE users SET disabled = ?, session = ? WHERE id = ?').bind(b.disabled ? 1 : 0, uid(), id).run();
   return json({ ok: true });
 });
-// Deleting someone removes their projects (and the files the app made in their Drive), then the account.
-on('DELETE', '/api/admin/users/:id', async (req, env, b, { id }, url, ctx, u) => {
-  if (adminOnly(u)) return adminOnly(u);
-  if (id === OWNER) return fail("The admin account can't be deleted.");
+// Deleting an account removes its projects (and the files the app made in their Drive), then the account.
+// Big libraries take several calls: it answers { more: true } until everything is gone.
+async function deleteAccount(env, id) {
   const { results } = await env.DB.prepare('SELECT id FROM projects WHERE owner_id = ? LIMIT 20').bind(id).all();
   for (const r of results) await deleteProject(env, r.id);
   const left = (await env.DB.prepare('SELECT COUNT(*) AS n FROM projects WHERE owner_id = ?').bind(id).first()).n;
-  if (left) return json({ more: true, left }); // big libraries: the app calls again until it's done
+  if (left) return { more: true, left };
   await env.DB.batch([
     env.DB.prepare('DELETE FROM folders WHERE owner_id = ?').bind(id),
     env.DB.prepare('DELETE FROM presets WHERE owner_id = ?').bind(id),
     env.DB.prepare('DELETE FROM push_subs WHERE owner_id = ?').bind(id),
+    env.DB.prepare('DELETE FROM saved_shares WHERE user_id = ?').bind(id),
     env.DB.prepare('DELETE FROM users WHERE id = ?').bind(id),
   ]);
-  return json({ ok: true });
+  return { ok: true };
+}
+on('DELETE', '/api/admin/users/:id', async (req, env, b, { id }, url, ctx, u) => {
+  if (adminOnly(u)) return adminOnly(u);
+  if (id === OWNER) return fail("The admin account can't be deleted.");
+  return json(await deleteAccount(env, id));
+});
+// Delete my own account (needs the password). The admin account can't delete itself.
+on('POST', '/api/me/delete', async (req, env, b, p, url, ctx, u) => {
+  if (u.id === OWNER) return fail("The admin account can't be deleted.");
+  const lockKey = 'pw:' + clientIp(req), wait = await lockedFor(env, lockKey);
+  if (wait) return fail(lockMessage(wait), 429);
+  if (!same(await passHash(env, u.pass_salt, b.password || ''), u.pass_hash || '')) { await recordFail(env, lockKey); return fail('Wrong password', 403); }
+  const r = await deleteAccount(env, u.id);
+  return json(r, 200, r.ok ? { 'set-cookie': setCookie('auth', '', '/', 0) } : {});
 });
 
 // ---- sign in / sign up (no login needed) ----
@@ -862,6 +886,30 @@ async function shareAllowed(req, env, s) {
   return !s.password_hash || same(cookie(req, 'share'), await shareCookie(env, s.token));
 }
 
+// Visitors who aren't signed in hear the first few seconds. The server only ever sends that much of the file:
+// its ID3 tag (if any) plus ~3 s more audio than the preview, sized from the file's bitrate.
+// ponytail: byte-based cut; files whose index sits at the end (some .m4a) won't preview, cut audio server-side if that matters
+const PREVIEW_SECS = 5;
+async function previewFile(env, req, t, owner) {
+  const part = range => getObject(env, new Request('http://x/', { headers: { range } }), t.file_key, owner);
+  let head = 0;
+  const r0 = await part('bytes=0-9');
+  if (r0.ok) {
+    const b = new Uint8Array(await r0.arrayBuffer());
+    if (b[0] === 0x49 && b[1] === 0x44 && b[2] === 0x33) head = 10 + ((b[6] & 127) << 21 | (b[7] & 127) << 14 | (b[8] & 127) << 7 | (b[9] & 127));
+  }
+  const perSec = t.duration ? t.size / t.duration : 40000;
+  const size = Math.min(t.size, head + Math.ceil(perSec * (PREVIEW_SECS + 3)) + 4096);
+  const m = /bytes=(\d+)-(\d*)/.exec(req.headers.get('range') || '');
+  const start = m ? +m[1] : 0, end = Math.min(size - 1, m && m[2] ? +m[2] : size - 1);
+  if (start > end) return new Response(null, { status: 416, headers: { 'content-range': `bytes */${size}` } });
+  const r = await part(`bytes=${start}-${end}`);
+  if (!r.ok) return new Response(null, { status: 502 });
+  const headers = { 'content-type': r.headers.get('content-type') || 'audio/mpeg', 'content-length': String(end - start + 1), 'accept-ranges': 'bytes', 'cache-control': 'no-store' };
+  if (m) headers['content-range'] = `bytes ${start}-${end}/${size}`;
+  return new Response(r.body, { status: m ? 206 : 200, headers });
+}
+
 async function handleShare(req, env, url, ctx) {
   const [, , token, action, trackId] = url.pathname.split('/');
   const s = await openShare(env, token);
@@ -883,20 +931,32 @@ async function handleShare(req, env, url, ctx) {
       ? await env.DB.prepare('SELECT name, cover FROM projects WHERE id = ?').bind(s.target_id).first()
       : await env.DB.prepare('SELECT name, cover FROM tracks WHERE id = ?').bind(s.target_id).first();
     const tracks = (await shareTracks(env, s)).map(({ file_key, ...t }) => ({ ...t, ext: drive.isDriveKey(file_key) ? 'mp3' : ext(file_key) }));
-    return json({ ...title, allow_download: !!s.allow_download, tracks }, 200, headers);
+    const viewer = await userFromCookie(req, env);
+    const saved = viewer && await env.DB.prepare('SELECT 1 FROM saved_shares WHERE user_id = ? AND token = ?').bind(viewer.id, token).first();
+    return json({ ...title, allow_download: !!s.allow_download, tracks, preview: PREVIEW_SECS,
+      viewer: viewer ? { username: viewer.username, avatar: viewer.avatar || null, mine: viewer.id === s.owner_id, saved: !!saved } : null }, 200, headers);
   }
   if (!(await shareAllowed(req, env, s))) return fail('Password needed', 401);
   const tracks = await shareTracks(env, s);
   const owner = () => getUser(env, s.owner_id);
+  const viewer = await userFromCookie(req, env); // signed in to [vault]? (full songs, downloads, saving)
+
+  if (action === 'save') {
+    if (!viewer) return fail('Sign in to save this', 401);
+    if (req.method === 'DELETE') await env.DB.prepare('DELETE FROM saved_shares WHERE user_id = ? AND token = ?').bind(viewer.id, token).run();
+    else await env.DB.prepare('INSERT OR IGNORE INTO saved_shares (user_id, token, created_at) VALUES (?, ?, ?)').bind(viewer.id, token, now()).run();
+    return json({ saved: req.method !== 'DELETE' });
+  }
 
   if (action === 'audio' || action === 'download') {
     const t = tracks.find(t => t.id === trackId);
     if (!t) return fail('Not found', 404);
     if (action === 'download') {
       if (!s.allow_download) return fail('Downloads are turned off for this link', 403);
+      if (!viewer) return fail('Sign in to download', 401);
       return json({ url: `/s/${token}/audio/${t.id}`, filename: `${t.name}.${drive.isDriveKey(t.file_key) ? 'mp3' : ext(t.file_key)}` });
     }
-    return streamFile(env, req, t.file_key, await owner(), 'public');
+    return viewer ? streamFile(env, req, t.file_key, await owner(), 'private') : previewFile(env, req, t, await owner());
   }
   if (action === 'cover') {
     const key = url.searchParams.get('k');
@@ -908,7 +968,7 @@ async function handleShare(req, env, url, ctx) {
     const b = await req.json().catch(() => ({}));
     const t = tracks.find(t => t.id === b.track_id);
     if (!t) return fail('Not found', 404);
-    const who = String(b.name || '').trim().slice(0, 80) || 'Anonymous';
+    const who = viewer ? viewer.username : String(b.name || '').trim().slice(0, 80) || 'Anonymous';
     // One notification per listener per half hour, not one per track.
     const recent = await env.DB.prepare('SELECT 1 FROM listens WHERE share_token = ? AND listener_name = ? AND at > ? LIMIT 1').bind(token, who, now() - 30 * 60e3).first();
     const r = await env.DB.prepare('INSERT INTO listens (share_token, listener_name, track_id, at, seconds, duration) VALUES (?, ?, ?, ?, 0, ?) RETURNING id')
@@ -925,7 +985,8 @@ async function handleShare(req, env, url, ctx) {
   if (action === 'comment' && req.method === 'POST') {
     const b = await req.json().catch(() => ({}));
     const t = tracks.find(t => t.id === b.track_id);
-    const body = String(b.body || '').trim().slice(0, 1000), who = String(b.name || '').trim().slice(0, 80) || 'Anonymous';
+    if (!viewer) return fail('Sign in to comment', 401);
+    const body = String(b.body || '').trim().slice(0, 1000), who = viewer.username;
     if (!t) return fail('Not found', 404);
     if (!body) return fail('Write something first');
     // ponytail: flood guard per link (30 per 10 min); add per-address limits if a link gets abused

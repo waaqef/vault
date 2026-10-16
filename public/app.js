@@ -128,12 +128,21 @@ const projectOf = id => S.projects.find(p => p.id === id);
 const trackOf = id => S.tracks.find(t => t.id === id);
 const setView = v => { S.view = v; S.arrange = false; S.select = null; store.set('view', v); document.body.classList.remove('side-open'); render(); };
 
+// Opened from a share page's "Sign in" / "Sign up": go back there once signed in. Only share links are allowed.
+try {
+  const q = new URLSearchParams(location.search).get('next');
+  if (q && /^\/s\/[0-9a-f]{32}$/.test(q)) sessionStorage.setItem('next', q);
+} catch {}
+const takeNext = () => { try { const n = sessionStorage.getItem('next'); sessionStorage.removeItem('next'); return n; } catch { return null; } };
+
 async function load() {
   try {
     const d = await api('/tree');
     Object.assign(S, d, { online: true });
     store.set('tree', d);
     if (d.me?.needsDrive) return driveStep();
+    const next = takeNext();
+    if (next) return location.replace(next);
     if (d.me && !d.me.isAdmin && !d.projects.length && !d.trash) firstProject();
     // once per session: if Backblaze is refusing files (key or daily limit), say so straight away
     if (!S.checkedStorage && S.tracks.length) { S.checkedStorage = true; storageProblem().then(why => why && toast(why, { error: true, ms: 15000 })); }
@@ -208,7 +217,7 @@ function showLogin() {
     h('button', { className: 'btn primary', style: big }, 'Create account')),
     link('Back', signUp));
   }
-  signIn();
+  new URLSearchParams(location.search).has('signup') ? signUp() : signIn();
 }
 // Step 3 of sign-up (and shown on sign-in until it's done): connect Google Drive, where this account's music is kept.
 function driveStep(box, d) {
@@ -292,6 +301,10 @@ function renderSide() {
       h('button', { className: 'icon-btn sm', title: 'New folder', 'aria-label': 'New folder', onclick: () => newFolder(null) }, icon('folderPlus', 16)),
       h('button', { className: 'icon-btn sm', title: 'New project', 'aria-label': 'New project', onclick: () => newProject(null) }, icon('plus', 16)))),
     tree(null, 0),
+    S.saved?.length > 0 && h('div', { className: 'section' }, h('span', { className: 'mono' }, '[shared with me]')),
+    (S.saved || []).map(x => h('a', { className: 'nav', href: `/s/${x.token}`, title: `${x.name}, shared by ${x.owner}` },
+      h('span', { className: 'caret' }), h('span', { className: 'thumb' + (x.cover ? '' : ' disc'), style: x.cover ? { backgroundImage: `url("/s/${x.token}/cover?k=${encodeURIComponent(x.cover)}")` } : {} }),
+      h('span', { className: 'label' }, x.name), h('span', { className: 'count' }, x.owner))),
     h('button', { className: 'nav settings-nav', onclick: () => settingsDialog() }, icon('gear', 16), h('span', { className: 'label' }, 'Settings')),
     h('button', { className: 'meter mono', title: 'Manage storage', 'aria-label': `Storage: ${fmtBytes(S.usage)} of ${fmtBytes(S.limit)} used. Manage storage`, onclick: storageDialog },
       `${fmtBytes(S.usage)} / ${fmtBytes(S.limit)}`, h('div', { className: 'bar' + (pct > 90 ? ' full' : '') }, h('i', { style: { width: pct + '%' } }))),
@@ -1820,9 +1833,9 @@ async function shareDialog(kind, target_id, name) {
     list.replaceChildren(...(rows.length ? rows.map(s => h('div', { className: 'item', style: s.revoked ? { opacity: 0.45 } : {} },
       s.has_password && h('span', { title: 'Password protected', style: { color: 'var(--fg-3)' } }, icon('lock', 14)),
       h('span', { className: 'grow mono' }, `${fmtDate(s.created_at)}${s.revoked ? ' · off' : s.expires_at ? ` · ${s.expires_at < Date.now() ? 'expired' : 'until ' + new Date(s.expires_at).toLocaleDateString()}` : ''}`),
-      h('button', { type: 'button', className: 'icon-btn sm' + (s.allow_download ? ' on' : ''), 'aria-pressed': !!s.allow_download,
-        title: s.allow_download ? 'Downloads allowed. Tap to turn off.' : 'Downloads off. Tap to allow.', 'aria-label': 'Allow downloads',
-        onclick: () => api(`/shares/${s.token}`, { method: 'PATCH', body: { allow_download: !s.allow_download } }).then(refresh, oops) }, icon('download', 14)),
+      h('button', { type: 'button', className: 'btn ghost' + (s.allow_download ? ' on' : ''), 'aria-pressed': !!s.allow_download,
+        title: s.allow_download ? 'Downloads allowed. Tap to turn off.' : 'Downloads off. Tap to allow.',
+        onclick: () => api(`/shares/${s.token}`, { method: 'PATCH', body: { allow_download: !s.allow_download } }).then(refresh, oops) }, icon('download', 14), s.allow_download ? 'On' : 'Off'),
       h('button', { type: 'button', className: 'btn ghost', title: 'Who listened', onclick: () => listensDialog(s.token) }, icon('headphones', 14), String(s.listens)),
       !s.revoked && h('button', { type: 'button', className: 'btn', onclick: () => copy(s.token) }, 'Copy'),
       h('button', { type: 'button', className: 'btn ghost', onclick: () => api(`/shares/${s.token}`, { method: 'PATCH', body: { revoked: !s.revoked } }).then(refresh, oops) }, s.revoked ? 'Turn on' : 'Turn off'),
@@ -1836,7 +1849,8 @@ async function shareDialog(kind, target_id, name) {
     },
   }, h('h2', {}, `Share “${name}”`),
   h('div', { className: 'row2' }, h('label', {}, 'Password', pw), h('label', {}, 'Expires', days)),
-  h('div', { className: 'set-row' }, h('div', { className: 't' }, 'Allow downloads', h('small', {}, 'Listeners can save the files, not just stream them')), dl),
+  h('div', { className: 'set-row' }, h('div', { className: 't' }, 'Allow downloads', h('small', {}, 'Signed-in [vault] users can download the files. You can change this later for each link.')), dl),
+  h('p', { className: 'muted', style: { margin: 0, fontSize: '13px' } }, 'People signed in to [vault] hear full songs, can comment and can save this to their library. Everyone else hears 5-second previews.'),
   h('div', { className: 'btns', style: { justifyContent: 'flex-start' } }, h('button', { className: 'btn primary' }, 'Create link')),
   h('label', {}, 'Links · downloads · who listened', list),
   h('div', { className: 'btns' }, h('button', { type: 'button', className: 'btn ghost', onclick: () => d.close() }, 'Done'))));
@@ -1995,7 +2009,9 @@ async function settingsDialog(only) {
         h('a', { className: 'btn', href: '/api/drive/connect' }, S.me.driveConnected ? 'Reconnect' : 'Connect')),
       S.me?.isAdmin && row('People', 'Invite codes and accounts', h('button', { className: 'btn', onclick: () => { d.close(); peopleDialog(); } }, 'Manage')),
       row('Password', 'Changing it logs out your other devices', h('button', { className: 'btn', onclick: () => { d.close(); passwordDialog(); } }, 'Change')),
-      row('Log out', 'On this device only. Songs kept on this device are removed.', h('button', { className: 'btn danger', onclick: logout }, 'Log out'))),
+      row('Log out', 'On this device only. Songs kept on this device are removed.', h('button', { className: 'btn danger', onclick: logout }, 'Log out')),
+      S.me && !S.me.isAdmin && row('Delete account', 'Deletes your projects and the files [vault] made in your Google Drive. This can\'t be undone.',
+        h('button', { className: 'btn danger', onclick: () => { d.close(); deleteAccountDialog(); } }, 'Delete'))),
     h('div', { className: 'btns' }, h('span', { className: 'mono', style: { marginRight: 'auto', color: 'var(--fg-3)', alignSelf: 'center' } }, '[vault] v1.4'),
       h('button', { className: 'btn primary', onclick: () => d.close() }, 'Done'))), { className: 'settings-dlg' });
   if (only) d.querySelectorAll('.set-sec').forEach(sec => sec.querySelector('h3').textContent !== `[${only}]` && sec.remove());
@@ -2072,6 +2088,24 @@ function passwordDialog() {
   }, h('h2', {}, 'Change password'),
   h('label', {}, 'Current password', cur), h('label', {}, 'New password (8+ characters)', next), h('label', {}, 'New password again', again), err,
   h('div', { className: 'btns' }, h('button', { type: 'button', className: 'btn ghost', onclick: () => d.close() }, 'Cancel'), h('button', { className: 'btn primary' }, 'Change password'))));
+}
+
+// Delete my account: asks for the password, then deletes in batches until everything is gone.
+function deleteAccountDialog() {
+  const pw = h('input', { type: 'password', required: true, autocomplete: 'current-password' });
+  const err = h('p', { className: 'form-err' });
+  const d = dialog(h('form', { className: 'stack', async onsubmit(e) {
+    e.preventDefault();
+    const btn = this.querySelector('.danger');
+    btn.disabled = true; err.textContent = ''; btn.textContent = 'Deleting…';
+    try {
+      while ((await api('/me/delete', { method: 'POST', body: { password: pw.value } })).more);
+      d.close(); await logout();
+    } catch (x) { err.textContent = x.message; btn.disabled = false; btn.textContent = 'Delete my account'; }
+  } }, h('h2', {}, 'Delete your account?'),
+  h('p', { className: 'muted', style: { margin: 0 } }, `This deletes ${S.me.username}, every project and track, and the files [vault] put in your Google Drive. Links you shared stop working. It can't be undone.`),
+  h('label', {}, 'Type your password to confirm', pw), err,
+  h('div', { className: 'btns' }, h('button', { type: 'button', className: 'btn ghost', onclick: () => d.close() }, 'Cancel'), h('button', { className: 'btn danger' }, 'Delete my account'))));
 }
 
 // Admin: make invite codes, see who has an account, turn accounts off or delete them.

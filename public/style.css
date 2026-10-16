@@ -1267,3 +1267,4 @@ a.btn { text-decoration: none; }
 .first-cover:active { transform: scale(.97); }
 .first-cover.has { border: 0; box-shadow: 0 12px 32px rgba(0,0,0,.4); }
 .first-cover.has > * { display: none; }
+a.nav { text-decoration: none; color: inherit; }

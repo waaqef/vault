@@ -13,7 +13,7 @@ export const sharePage = exists => `<!doctype html>
 @keyframes eq{0%,100%{transform:scaleY(.3)}50%{transform:scaleY(1)}}
 main{max-width:680px;margin:0 auto;padding:48px 16px 140px}
 main>*{animation:rise .45s var(--ease) both}
-.brand{font-weight:600;letter-spacing:-.035em;font-size:16px;margin-bottom:44px}
+.brand{display:inline-block;color:inherit;text-decoration:none;font-weight:600;letter-spacing:-.035em;font-size:16px;margin-bottom:44px}
 .head{display:flex;gap:24px;align-items:flex-end;margin-bottom:32px}
 .cover{width:148px;height:148px;border-radius:14px;background:var(--f1) center/cover;flex:none;box-shadow:0 18px 50px rgba(0,0,0,.45)}
 .disc{border-radius:50%;background:radial-gradient(circle,var(--bg) 0 13%,rgba(255,255,255,.35) 13.5% 15%,transparent 15.5%),conic-gradient(from 30deg,#2a2a2a,#6d6d6d 12%,#2e2e2e 25%,#8a8a8a 38%,#2b2b2b 52%,#5e5e5e 66%,#262626 80%,#7a7a7a 92%,#2a2a2a);animation:spin 14s linear infinite}
@@ -41,6 +41,10 @@ audio{position:fixed;left:0;right:0;margin:0 auto;bottom:calc(16px + env(safe-ar
 .clist{display:grid;gap:2px;margin-top:8px;max-height:30vh;overflow-y:auto}
 .cm{animation:rise .3s var(--ease) both;display:grid;grid-template-columns:auto 1fr;gap:10px;align-items:baseline;padding:6px 2px;font-size:13px;color:var(--fg2)}.cm b{color:var(--fg);font-weight:600}
 .ts{height:auto;padding:2px 9px;border-radius:999px;background:rgba(255,210,63,.16);color:#ffdf7a;font:11px "Plex Mono",ui-monospace,monospace}
+.gate{display:grid;gap:10px;margin:0 -12px 18px;padding:16px;border-radius:16px;background:rgba(255,255,255,.05);box-shadow:inset 0 0 0 1px rgba(255,255,255,.08);transition:box-shadow .3s,background .3s}
+.gate p{margin:0;color:var(--fg2)}.gate .acts{display:flex;gap:8px;flex-wrap:wrap}.gate a{display:inline-grid;place-items:center;height:38px;padding:0 18px;border-radius:999px;font-weight:500;text-decoration:none;background:#fff;color:var(--bg)}
+.gate a.alt{background:rgba(255,255,255,.08);color:var(--fg)}.gate.ping{background:rgba(255,255,255,.1);box-shadow:inset 0 0 0 1px rgba(255,255,255,.4)}
+.save{margin-top:12px;height:34px;padding:0 16px;font-size:13px}.save.on{background:rgba(255,255,255,.1);color:var(--fg)}
 @media(max-width:560px){.mwrap{display:none}.row{grid-template-columns:28px 1fr auto}.row.has-dl{grid-template-columns:28px 1fr auto 34px}.head{flex-direction:column;align-items:flex-start}.cover{width:120px;height:120px}h1{font-size:28px}}
 @media(prefers-reduced-motion:reduce){*{animation-duration:.01ms!important;animation-iteration-count:1!important}}
 </style></head><body><main id="m">${exists ? '' : '<div class="brand">[vault]</div><h1>Link not available</h1><p class="mono">[it may have expired or been turned off]</p>'}</main>
@@ -49,14 +53,14 @@ ${exists ? `<audio id="a" controls hidden></audio>
 const token = location.pathname.split('/')[2], base = '/s/' + token, m = document.getElementById('m'), a = document.getElementById('a');
 const el = (t, p = {}, ...k) => { const e = document.createElement(t); Object.assign(e, p); e.append(...k); return e; };
 const fmt = s => s ? Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0') : '';
-const brand = () => el('div', { className: 'brand', textContent: '[vault]' });
+const brand = () => el('a', { className: 'brand', href: '/', textContent: '[vault]' });
 let name = ''; try { name = localStorage.getItem('listener') || ''; } catch {}
 async function open(password) {
   const r = await fetch(base + '/open', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password }) });
   const d = await r.json();
   if (r.status === 401) return ask(password ? d.error : '');
   if (!r.ok) { m.replaceChildren(brand(), el('h1', { textContent: 'Link not available' })); return; }
-  if (!name) return askName(d);
+  if (d.viewer) name = d.viewer.username;
   show(d);
 }
 function ask(err) {
@@ -65,18 +69,21 @@ function ask(err) {
   f.onsubmit = e => { e.preventDefault(); open(i.value); };
   m.replaceChildren(f);
 }
-function askName(d) {
-  const i = el('input', { placeholder: 'Your name', required: true, autofocus: true, maxLength: 80 });
-  const f = el('form', {}, el('div', { className: 'brand', textContent: '[vault]', style: 'margin:0 0 8px' }), el('div', { className: 'mono', textContent: '[who’s listening?]' }), i, el('button', { textContent: 'Continue' }));
-  f.onsubmit = e => { e.preventDefault(); name = i.value.trim(); try { localStorage.setItem('listener', name); } catch {} show(d); };
-  m.replaceChildren(f);
-}
 function show(d) {
+  // Signed in to [vault]: full songs, comments, downloads and saving. Otherwise: short previews and a sign-in card.
+  const full = !!d.viewer, next = encodeURIComponent(location.pathname);
+  a.controls = full; // a preview's player bar would show the cut-down length
+  const gate = full ? null : el('div', { className: 'gate' },
+    el('div', { className: 'mono', textContent: '[preview]' }),
+    el('p', { textContent: 'You\u2019re hearing ' + d.preview + '-second previews. Sign in to [vault] to hear the full songs, comment' + (d.allow_download ? ', download' : '') + ' and save this to your library.' }),
+    el('div', { className: 'acts' }, el('a', { href: '/?next=' + next, textContent: 'Sign in' }), el('a', { className: 'alt', href: '/?signup=1&next=' + next, textContent: 'Sign up with an invite code' })));
+  const nudge = () => { gate.classList.add('ping'); gate.scrollIntoView({ behavior: 'smooth', block: 'center' }); setTimeout(() => gate.classList.remove('ping'), 900); };
   const ck = d.cover || d.tracks.find(t => t.cover)?.cover;
   const cover = el('div', { className: 'cover' + (ck ? '' : ' disc') });
   if (ck) cover.style.backgroundImage = 'url("' + base + '/cover?k=' + encodeURIComponent(ck) + '")';
   const DL = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4.5v11M7.5 11l4.5 4.5 4.5-4.5M5 19.5h14"/></svg>';
   async function download(t, btn) {
+    if (!full) return nudge();
     btn.disabled = true;
     try {
       const r = await fetch(base + '/download/' + t.id), j = await r.json();
@@ -128,7 +135,7 @@ function show(d) {
   const post = el('button', { textContent: 'Post', type: 'submit' });
   const form = el('form', { className: 'cform' }, input, post);
   const list = el('div', { className: 'clist' });
-  const now = el('section', { className: 'now', hidden: true }, nowName, cv, el('div', { className: 'times' }, tNow, tEnd), form, list);
+  const now = el('section', { className: 'now', hidden: true }, nowName, cv, el('div', { className: 'times' }, tNow, tEnd), full ? form : '', list);
   let comments = [], pk = null, frame = 0, atMark = null;
   const clock = s => fmt(s) || '0:00';
   function draw() {
@@ -137,7 +144,7 @@ function show(d) {
     if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(hh * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(hh * dpr); }
     const g = cv.getContext('2d');
     g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, hh);
-    const dur = a.duration || d.tracks[cur].duration || 0, p = dur ? a.currentTime / dur : 0, n = Math.max(20, Math.floor(w / 4));
+    const dur = (full && a.duration) || d.tracks[cur].duration || a.duration || 0, p = dur ? a.currentTime / dur : 0, n = Math.max(20, Math.floor(w / 4));
     for (let i = 0; i < n; i++) {
       const bh = Math.max(2, (pk ? Math.pow(pk[Math.floor((i * pk.length) / n)], 1.8) : 0.05) * (hh - 14));
       g.fillStyle = (i + 0.5) / n <= p ? '#fff' : 'rgba(255,255,255,.26)';
@@ -151,8 +158,11 @@ function show(d) {
   const redraw = () => { if (!frame) frame = requestAnimationFrame(() => { frame = 0; draw(); }); };
   addEventListener('resize', redraw);
   function seekTo(e) {
-    const r = cv.getBoundingClientRect(), dur = a.duration || 0;
-    if (dur) { a.currentTime = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)) * dur; redraw(); }
+    const r = cv.getBoundingClientRect(), dur = (full && a.duration) || d.tracks[cur].duration || 0;
+    if (!dur) return;
+    const at = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)) * dur;
+    if (!full && at >= d.preview) return nudge();
+    a.currentTime = at; redraw();
   }
   cv.onpointerdown = e => { seekTo(e); cv.setPointerCapture(e.pointerId); cv.onpointermove = seekTo; };
   cv.onpointerup = cv.onpointercancel = () => { cv.onpointermove = null; };
@@ -200,29 +210,41 @@ function show(d) {
     rows.forEach((r, j) => r.classList.toggle('on', j === i));
     now.hidden = false; nowName.textContent = t.name; tEnd.textContent = clock(t.duration); tNow.textContent = '0:00';
     pk = peaksOf(t.peaks); loadComments(t); redraw();
-    a.hidden = false; a.src = base + '/audio/' + t.id; a.play();
+    a.hidden = false; a.src = base + '/audio/' + t.id + (full ? '?full=1' : ''); a.play(); // separate URLs, so a preview is never cached as the song
   }
   a.onplay = async () => {
     document.body.classList.remove('paused');
-    if (!listenId && !starting && cur >= 0) {
+    if (full && !listenId && !starting && cur >= 0) {
       const t = d.tracks[cur];
       starting = fetch(base + '/listen', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ track_id: t.id, name, duration: t.duration }) })
         .then(r => r.json()).then(j => { listenId = j.id; }).catch(() => {});
     }
     clearInterval(timer); timer = setInterval(() => progress(false), 10000);
   };
-  a.onloadedmetadata = () => { tEnd.textContent = clock(a.duration); redraw(); };
+  a.onloadedmetadata = () => { if (full) tEnd.textContent = clock(a.duration); redraw(); };
   a.ontimeupdate = () => {
+    if (!full && a.currentTime >= d.preview) { a.pause(); a.currentTime = 0; nudge(); }
     if (a.currentTime > maxT) maxT = a.currentTime;
     tNow.textContent = clock(a.currentTime);
     if (!input.value) input.placeholder = 'Comment at ' + clock(a.currentTime) + '…';
     redraw();
   };
   a.onpause = () => { document.body.classList.add('paused'); clearInterval(timer); progress(false); };
-  a.onended = () => { maxT = a.duration || maxT; progress(false); clearInterval(timer); if (cur + 1 < rows.length) play(cur + 1); };
+  a.onended = () => { if (!full) return nudge(); maxT = a.duration || maxT; progress(false); clearInterval(timer); if (cur + 1 < rows.length) play(cur + 1); };
   addEventListener('pagehide', () => progress(true));
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') progress(true); });
-  m.replaceChildren(brand(), el('div', { className: 'head' }, cover, el('div', {}, el('div', { className: 'mono', textContent: '[shared with you]' }), el('h1', { textContent: d.name }), el('div', { className: 'mono', textContent: d.tracks.length + (d.tracks.length === 1 ? ' track' : ' tracks') + (d.allow_download ? ' · downloads on' : '') }))), now, ...rows);
+  let saveBtn = '';
+  if (full && !d.viewer.mine) {
+    saveBtn = el('button', { className: 'save' });
+    const paint = () => { saveBtn.classList.toggle('on', d.viewer.saved); saveBtn.textContent = d.viewer.saved ? '\u2713 In your library' : '+ Save to my library'; };
+    saveBtn.onclick = async () => {
+      saveBtn.disabled = true;
+      try { const r = await fetch(base + '/save', { method: d.viewer.saved ? 'DELETE' : 'POST' }); if (r.ok) d.viewer.saved = (await r.json()).saved; } catch {}
+      saveBtn.disabled = false; paint();
+    };
+    paint();
+  }
+  m.replaceChildren(brand(), el('div', { className: 'head' }, cover, el('div', {}, el('div', { className: 'mono', textContent: '[shared with you]' }), el('h1', { textContent: d.name }), el('div', { className: 'mono', textContent: d.tracks.length + (d.tracks.length === 1 ? ' track' : ' tracks') + (d.allow_download ? ' · downloads on' : '') }), saveBtn)), gate || '', now, ...rows);
 }
 open();
 </script>` : ''}
