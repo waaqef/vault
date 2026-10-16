@@ -996,6 +996,20 @@ async function previewFile(env, req, t, owner) {
   return new Response(r.body, { status: m ? 206 : 200, headers });
 }
 
+// Ask the admin for an invite (from the sign-up screen, or a share page's sign-in card). A few per address, then a wait.
+async function requestInvite(req, env, ctx, url, token = null) {
+  const lockKey = 'request:' + clientIp(req), wait = await lockedFor(env, lockKey);
+  if (wait) return fail(lockMessage(wait), 429);
+  const b = await req.json().catch(() => ({}));
+  const name = String(b.name || '').trim().slice(0, 80);
+  if (!name) return fail('Add your name');
+  await recordFail(env, lockKey);
+  await env.DB.prepare('INSERT INTO access_requests (share_token, name, contact, message, created_at) VALUES (?, ?, ?, ?, ?)')
+    .bind(token, name, String(b.contact || '').trim().slice(0, 200), String(b.message || '').trim().slice(0, 500), now()).run();
+  notify(ctx, env, OWNER, { title: `${name} wants an invite to [vault]`, body: String(b.message || b.contact || (token ? 'From a share link' : 'From the sign-up screen')).slice(0, 200), tag: 'request', url: '/' }, url.origin);
+  return json({ ok: true });
+}
+
 async function handleShare(req, env, url, ctx) {
   const [, , token, action, trackId] = url.pathname.split('/');
   const s = await openShare(env, token);
@@ -1027,18 +1041,7 @@ async function handleShare(req, env, url, ctx) {
   const owner = () => getUser(env, s.owner_id);
   const viewer = await userFromCookie(req, env); // signed in to [vault]? (full songs, downloads, saving)
 
-  if (action === 'request' && req.method === 'POST') {
-    const lockKey = 'request:' + clientIp(req), wait = await lockedFor(env, lockKey);
-    if (wait) return fail(lockMessage(wait), 429);
-    const b = await req.json().catch(() => ({}));
-    const name = String(b.name || '').trim().slice(0, 80);
-    if (!name) return fail('Add your name');
-    await recordFail(env, lockKey); // a few per address, then a wait
-    await env.DB.prepare('INSERT INTO access_requests (share_token, name, contact, message, created_at) VALUES (?, ?, ?, ?, ?)')
-      .bind(token, name, String(b.contact || '').trim().slice(0, 200), String(b.message || '').trim().slice(0, 500), now()).run();
-    notify(ctx, env, OWNER, { title: `${name} wants an invite to [vault]`, body: String(b.message || b.contact || 'From a share link').slice(0, 200), tag: 'request', url: '/' }, url.origin);
-    return json({ ok: true });
-  }
+  if (action === 'request' && req.method === 'POST') return requestInvite(req, env, ctx, url, token);
   if (action === 'save') {
     if (!viewer) return fail('Sign in to save this', 401);
     if (req.method === 'DELETE') await env.DB.prepare('DELETE FROM saved_shares WHERE user_id = ? AND token = ?').bind(viewer.id, token).run();
@@ -1126,6 +1129,7 @@ export default {
 
       if (path === '/api/login' && req.method === 'POST') return await login(req, env);
       if (path === '/api/signup' && req.method === 'POST') return await signup(req, env);
+      if (path === '/api/request-invite' && req.method === 'POST') return await requestInvite(req, env, ctx, url);
       if (path === '/api/logout') return json({ ok: true }, 200, { 'set-cookie': setCookie('auth', '', '/', 0) });
       if (path === '/api/shortcut-upload' && req.method === 'POST') return await shortcutUpload(req, env, url);
       if (path === '/api/drive/callback') return await driveCallback(req, env, url);

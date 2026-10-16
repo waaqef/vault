@@ -210,7 +210,21 @@ function showLogin() {
       await api('/signup', { method: 'POST', body: { invite: code.value, checkOnly: true } });
       profile(code.value.trim().toUpperCase());
     }, h('label', {}, '[invite code]', code), err(), h('button', { className: 'btn primary', style: big }, 'Next')),
+    link('No invite code? Ask for one', askInvite),
     link('Back to sign in', signIn));
+  }
+  // No code: send the admin a request (they get a notification, and it shows in People).
+  function askInvite() {
+    const nm = field('text', 'name', { required: true, maxLength: 80 }), ct = field('text', 'email', { maxLength: 200, placeholder: 'Instagram, email, number…' });
+    const note = field('text', 'off', { maxLength: 500, placeholder: 'Optional' });
+    fill(box, head, h('div', { className: 'brandmark' }, '[ask for an invite]'), form(async () => {
+      await api('/request-invite', { method: 'POST', body: { name: nm.value, contact: ct.value, message: note.value } });
+      fill(box, head, h('div', { className: 'brandmark' }, '[request sent]'),
+        h('p', { className: 'muted', style: { margin: 0 } }, "You'll hear back if you get an invite code. When you do, choose “Have an invite code? Sign up”."),
+        link('Back to sign in', signIn));
+    }, h('label', {}, '[your name]', nm), h('label', {}, '[how to reach you]', ct), h('label', {}, '[a note]', note), err(),
+    h('button', { className: 'btn primary', style: big }, 'Send request')),
+    link('Back', signUp));
   }
   // Step 2: username, password and an optional profile picture.
   function profile(invite) {
