@@ -698,7 +698,7 @@ on('POST', '/api/admin/invites', async (req, env, b, p, url, ctx, u) => {
 });
 on('DELETE', '/api/admin/invites/:code', async (req, env, b, { code }, url, ctx, u) => {
   if (adminOnly(u)) return adminOnly(u);
-  await env.DB.prepare('DELETE FROM invites WHERE code = ? AND used_by IS NULL').bind(code).run();
+  await env.DB.prepare('DELETE FROM invites WHERE code = ?').bind(code).run(); // a used code can go too: the account stays
   return json({ ok: true });
 });
 on('GET', '/api/admin/users', async (req, env, b, p, url, ctx, u) => {
@@ -727,6 +727,7 @@ async function deleteAccount(env, id) {
     env.DB.prepare('DELETE FROM presets WHERE owner_id = ?').bind(id),
     env.DB.prepare('DELETE FROM push_subs WHERE owner_id = ?').bind(id),
     env.DB.prepare('DELETE FROM saved_shares WHERE user_id = ?').bind(id),
+    env.DB.prepare('DELETE FROM invites WHERE used_by = ?').bind(id),
     env.DB.prepare('DELETE FROM users WHERE id = ?').bind(id),
   ]);
   return { ok: true };
