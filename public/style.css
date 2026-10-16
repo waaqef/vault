@@ -1258,3 +1258,4 @@ dialog { overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
 .linkish:hover { color: var(--fg); text-decoration: underline; }
 .login .stack { gap: 12px; }
 a.btn { text-decoration: none; }
+.login-links { display: flex; justify-content: center; gap: 14px; margin-top: 4px; } .login-links a { color: var(--fg-3); text-decoration: none; font-size: 12px; } .login-links a:hover { color: var(--fg); }

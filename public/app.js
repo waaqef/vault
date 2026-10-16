@@ -176,7 +176,8 @@ function showLogin() {
       await api('/login', { method: 'POST', body: { username: user.value.trim(), password: pw.value } });
       d.close(); load();
     }, h('label', {}, '[username]', user), h('label', {}, '[password]', pw), err(), h('button', { className: 'btn primary', style: big }, 'Sign in')),
-    link('Have an invite code? Sign up', signUp));
+    link('Have an invite code? Sign up', signUp),
+    h('small', { className: 'login-links' }, h('a', { href: '/about' }, 'About'), h('a', { href: '/privacy' }, 'Privacy'), h('a', { href: '/terms' }, 'Terms')));
   }
   // Sign up, step 1: the invite code.
   function signUp() {
