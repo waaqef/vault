@@ -47,7 +47,7 @@ CREATE TABLE IF NOT EXISTS users (
   avatar TEXT, storage TEXT NOT NULL DEFAULT 'drive', drive_refresh TEXT, drive_folder TEXT, session TEXT,
   upload_key TEXT, disabled INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL
 );
-CREATE TABLE IF NOT EXISTS invites (code TEXT PRIMARY KEY, created_by TEXT NOT NULL, used_by TEXT, used_at INTEGER, created_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS invites (code TEXT PRIMARY KEY, created_by TEXT NOT NULL, used_by TEXT, used_at INTEGER, disabled INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL);
 INSERT OR IGNORE INTO users (id, username, is_admin, storage, created_at) VALUES ('owner', 'admin', 1, 'b2', 0);
 CREATE INDEX IF NOT EXISTS projects_owner ON projects (owner_id);
 CREATE INDEX IF NOT EXISTS folders_owner ON folders (owner_id);
