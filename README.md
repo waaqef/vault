@@ -1,6 +1,6 @@
 # [vault]
 
-**Live:** https://vault.choseroxy.workers.dev
+**Live:** https://vault.choseroxy.workers.dev/about
 
 Your own place for work-in-progress music: projects and folders, sorting by BPM, key and tags, share links that show who listened, an editor that writes changes into the file, offline listening, and voice-memo recording. It works on iPhone, PC and laptop, has no file limit, and costs $0.
 
