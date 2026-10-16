@@ -1,0 +1,10 @@
+[
+  {
+    "corsRuleName": "vault-app",
+    "allowedOrigins": ["https://vault.choseroxy.workers.dev"],
+    "allowedOperations": ["s3_get", "s3_head", "s3_put"],
+    "allowedHeaders": ["content-type", "range"],
+    "exposeHeaders": ["content-length", "content-range", "etag"],
+    "maxAgeSeconds": 3600
+  }
+]

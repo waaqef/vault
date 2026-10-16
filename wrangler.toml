@@ -1,0 +1,40 @@
+name = "vault"
+main = "worker.js"
+compatibility_date = "2025-09-01"
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+run_worker_first = ["/api/*", "/s/*"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "vault"
+database_id = "04c74fa6-2188-4580-b50c-ce580bc6effc"
+
+# Backblaze B2 (S3-compatible). Copy these from your bucket's page.
+# Secrets (not here): APP_PASSWORD, B2_KEY_ID, B2_APP_KEY — set with `npx wrangler secret put NAME`.
+[vars]
+B2_ENDPOINT = "https://s3.us-east-005.backblazeb2.com"
+B2_REGION = "us-east-005"
+B2_BUCKET = "untitled-vault"
+
+# `npm run dev:local`: everything runs on your computer with a simulated bucket. No accounts needed.
+[env.local.assets]
+directory = "./public"
+binding = "ASSETS"
+run_worker_first = ["/api/*", "/s/*", "/blob/*"]
+
+[[env.local.d1_databases]]
+binding = "DB"
+database_name = "vault"
+database_id = "local"
+
+[[env.local.r2_buckets]]
+binding = "LOCAL"
+bucket_name = "vault-local"
+
+[env.local.vars]
+B2_ENDPOINT = ""
+B2_REGION = ""
+B2_BUCKET = ""
