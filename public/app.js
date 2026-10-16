@@ -1884,7 +1884,8 @@ const SHARE_DAYS = [['', 'Never'], ['1', '1 day'], ['7', '7 days'], ['30', '30 d
 async function settingsDialog(only) {
   document.body.classList.remove('side-open');
   const row = (title, sub, control) => h('div', { className: 'set-row' }, h('div', { className: 't' }, title, sub && h('small', {}, sub)), control);
-  const toggle = (key, after) => h('input', { type: 'checkbox', className: 'toggle', checked: settings[key], 'aria-label': key, onchange() { setSetting(key, this.checked); after?.(); } });
+  // flip: the switch reads the other way round from the setting (Reduce motion = motion off)
+  const toggle = (key, after, flip = false) => h('input', { type: 'checkbox', className: 'toggle', checked: settings[key] !== flip, 'aria-label': key, onchange() { setSetting(key, this.checked !== flip); after?.(); } });
   const swatches = h('div', { className: 'swatches', role: 'radiogroup', 'aria-label': 'Accent colour' }, ACCENTS.map(([c, name]) =>
     h('button', { className: 'swatch' + (settings.accent === c ? ' on' : ''), role: 'radio', 'aria-checked': settings.accent === c, 'aria-label': name, title: name, style: { background: c },
       onclick() { setSetting('accent', c); swatches.querySelectorAll('.swatch').forEach(s => { const on = s === this; s.classList.toggle('on', on); s.setAttribute('aria-checked', on); }); } })));
@@ -1910,9 +1911,9 @@ async function settingsDialog(only) {
     h('div', { className: 'set-sec' }, h('h3', {}, '[appearance]'),
       row('Accent colour', 'Editor, playhead, progress and switches', swatches),
       row('Pure black', 'Darker background for OLED screens', toggle('oled')),
-      row('Animations', 'Turn off to reduce motion', toggle('motion')),
-      row('Refined look', 'Hairlines, tighter corners and quieter shadows. Off = the previous look.', toggle('refined')),
-      row('Glass everywhere', 'Depth and grain on buttons, the player and panels. Off = the flatter look.', toggle('glass'))),
+      row('Reduce motion', null, toggle('motion', null, true)),
+      row('Refined look', null, toggle('refined')),
+      row('Legacy UI', 'Old UI with no depth or grain or glass', toggle('glass', null, true))),
     h('div', { className: 'set-sec' }, h('h3', {}, '[library]'),
       row('BPM & key columns', 'Show them in track lists', toggle('columns')),
       row('Waveforms', noWave ? `${noWave} ${noWave === 1 ? 'track doesn’t' : 'tracks don’t'} have one yet. They also fill in as you play.` : 'Every track has one',
@@ -1939,8 +1940,9 @@ async function settingsDialog(only) {
       row('Old versions', oldInfo, oldBtn),
       row('Downloads on this device', local, clearBtn),
       row('Back up everything', 'Copies every project, cover and note into a folder on this computer', h('button', { className: 'btn', onclick: () => { d.close(); backupAll(); } }, 'Back up'))),
-    h('div', { className: 'set-sec' }, h('h3', {}, '[iphone]'),
-      row('Upload from the share sheet', 'Send audio straight from AirDrop, Files or iMessage', h('button', { className: 'btn', onclick: () => { d.close(); shortcutDialog(); } }, 'Set up'))),
+    // The share-sheet Shortcut is for the web app; hidden inside the sideloaded iPhone app.
+    !nativeHaptics && h('div', { className: 'set-sec' }, h('h3', {}, '[iphone web app]'),
+      row('Upload from the share sheet', 'Web app only (Safari / Home Screen), not the sideloaded app. Send audio straight from AirDrop, Files or iMessage.', h('button', { className: 'btn', onclick: () => { d.close(); shortcutDialog(); } }, 'Set up'))),
     h('div', { className: 'set-sec' }, h('h3', {}, '[account]'),
       S.me && row(h('span', { className: 'me-row' }, meAvatar, h('span', {}, S.me.username, h('small', {}, S.me.isAdmin ? 'Admin' : 'Member'))), null,
         h('span', { className: 'btns', style: { margin: 0 } },
@@ -2080,7 +2082,7 @@ async function shortcutDialog() {
     const { exists } = newKey ? { exists: true } : await api('/upload-key').catch(e => (oops(e), { exists: false }));
     const makeKey = async () => { const { key } = await api('/upload-key', { method: 'POST' }); draw(key); };
     fill(box,
-      h('p', { className: 'muted', style: { margin: 0 } }, 'Make one iPhone Shortcut, then choose “Upload to [vault]” whenever you share an audio file. It lands in your Inbox with BPM and key read from the name.'),
+      h('p', { className: 'muted', style: { margin: 0 } }, 'For the web app only (Safari or the Home Screen icon), not the sideloaded [vault] app. Make one iPhone Shortcut, then choose “Upload to [vault]” whenever you share an audio file. It lands in your Inbox with BPM and key read from the name.'),
       newKey
         ? h('div', { className: 'stack' }, h('b', {}, 'Your upload key'), code(newKey), h('small', { className: 'muted' }, "Copy it now. It won't be shown again; make a new one any time."))
         : exists
