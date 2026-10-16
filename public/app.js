@@ -280,7 +280,7 @@ function renderSide() {
     ic && h('span', { className: 'nav-ic' }, icon(ic, 16)), h('span', { className: 'label' }, label), h('span', { className: 'count' }, n));
   fill(side,
     h('div', { className: 'brand' }, h('button', { className: 'brand-home', 'aria-label': 'Home', title: 'Home', onclick: () => setView({ type: 'home' }) }, '[vault]'), !S.online && h('span', { className: 'mono' }, '[offline]'),
-      S.me && h('button', { className: 'me', title: `Signed in as ${S.me.username}`, 'aria-label': `Account: ${S.me.username}`, onclick: settingsDialog }, avatarEl(S.me))),
+      S.me && h('button', { className: 'me', title: `Signed in as ${S.me.username}`, 'aria-label': `Account: ${S.me.username}`, onclick: () => settingsDialog('account') }, avatarEl(S.me))),
     navItem('home', 'Home', '', 'home'),
     navItem('all', 'All tracks', S.tracks.length, 'music'),
     navItem('starred', 'Starred', S.tracks.filter(t => t.mark === 'star').length, 'star'),
@@ -290,7 +290,7 @@ function renderSide() {
       h('button', { className: 'icon-btn sm', title: 'New folder', 'aria-label': 'New folder', onclick: () => newFolder(null) }, icon('folderPlus', 16)),
       h('button', { className: 'icon-btn sm', title: 'New project', 'aria-label': 'New project', onclick: () => newProject(null) }, icon('plus', 16)))),
     tree(null, 0),
-    h('button', { className: 'nav settings-nav', onclick: settingsDialog }, icon('gear', 16), h('span', { className: 'label' }, 'Settings')),
+    h('button', { className: 'nav settings-nav', onclick: () => settingsDialog() }, icon('gear', 16), h('span', { className: 'label' }, 'Settings')),
     h('button', { className: 'meter mono', title: 'Manage storage', 'aria-label': `Storage: ${fmtBytes(S.usage)} of ${fmtBytes(S.limit)} used. Manage storage`, onclick: storageDialog },
       `${fmtBytes(S.usage)} / ${fmtBytes(S.limit)}`, h('div', { className: 'bar' + (pct > 90 ? ' full' : '') }, h('i', { style: { width: pct + '%' } }))),
   );
@@ -1880,7 +1880,8 @@ async function recordDialog() {
 
 // ---- settings ---------------------------------------------------------------------------
 const SHARE_DAYS = [['', 'Never'], ['1', '1 day'], ['7', '7 days'], ['30', '30 days']];
-async function settingsDialog() {
+// only = 'account': just the [account] section (opened from the profile picture).
+async function settingsDialog(only) {
   document.body.classList.remove('side-open');
   const row = (title, sub, control) => h('div', { className: 'set-row' }, h('div', { className: 't' }, title, sub && h('small', {}, sub)), control);
   const toggle = (key, after) => h('input', { type: 'checkbox', className: 'toggle', checked: settings[key], 'aria-label': key, onchange() { setSetting(key, this.checked); after?.(); } });
@@ -1905,7 +1906,7 @@ async function settingsDialog() {
     render(); d.close(); toast('Downloads removed');
   } }, 'Remove all');
   const d = dialog(h('div', { className: 'stack settings' },
-    h('h2', {}, 'Settings'),
+    h('h2', {}, only ? 'Account' : 'Settings'),
     h('div', { className: 'set-sec' }, h('h3', {}, '[appearance]'),
       row('Accent colour', 'Editor, playhead, progress and switches', swatches),
       row('Pure black', 'Darker background for OLED screens', toggle('oled')),
@@ -1960,6 +1961,7 @@ async function settingsDialog() {
       row('Log out', 'On this device only. Songs kept on this device are removed.', h('button', { className: 'btn danger', onclick: logout }, 'Log out'))),
     h('div', { className: 'btns' }, h('span', { className: 'mono', style: { marginRight: 'auto', color: 'var(--fg-3)', alignSelf: 'center' } }, '[vault] v1.4'),
       h('button', { className: 'btn primary', onclick: () => d.close() }, 'Done'))), { className: 'settings-dlg' });
+  if (only) d.querySelectorAll('.set-sec').forEach(sec => sec.querySelector('h3').textContent !== `[${only}]` && sec.remove());
   api('/versions/old').then(({ count, size }) => {
     oldInfo.textContent = count ? `${count} older ${count === 1 ? 'version' : 'versions'} of edited tracks · ${fmtBytes(size)}` : 'None. Only the versions in use are stored.';
     oldBtn.disabled = !count;
