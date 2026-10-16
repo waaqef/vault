@@ -93,6 +93,17 @@ Its Authorized redirect URI must be exactly: ${APP_ORIGIN}/api/drive/callback\n`
   process.exit(0);
 }
 
+// `node setup.mjs email`: email you when someone asks for an invite (Resend, free). Leaves everything else as it is.
+if (process.argv[2] === 'email') {
+  console.log(`\nresend.com → sign up (free) → API Keys → Create API key (Sending access).
+Use the email address you signed up to Resend with: Resend's free sender can only email that address.\n`);
+  const key = await ask('Resend API key: ', true), to = (await ask('Your email address: ')).trim();
+  if (!/^re_/.test(key) || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) { console.error("\nThat doesn't look like a Resend key (re_...) and an email address.\n"); process.exit(1); }
+  saveSecrets({ RESEND_API_KEY: key, NOTIFY_EMAIL: to });
+  console.log('\nDone! Invite requests will be emailed to you.\n');
+  process.exit(0);
+}
+
 try {
   console.log('\n[vault] setup — nothing you type here is shown or sent anywhere except Cloudflare and Backblaze.\n');
 
