@@ -1259,3 +1259,11 @@ dialog { overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
 .login .stack { gap: 12px; }
 a.btn { text-decoration: none; }
 .login-links { display: flex; justify-content: center; gap: 14px; margin-top: 4px; } .login-links a { color: var(--fg-3); text-decoration: none; font-size: 12px; } .login-links a:hover { color: var(--fg); }
+/* first project: big square cover picker */
+.first-project { text-align: left; }
+.first-cover { position: relative; width: 168px; aspect-ratio: 1; justify-self: center; border-radius: 16px; border: 1.5px dashed rgba(255,255,255,.22); background: var(--fill-1) center / cover no-repeat;
+  display: grid; place-content: center; justify-items: center; gap: 8px; color: var(--fg-2); transition: border-color .15s, transform .12s var(--ease); }
+.first-cover:hover { border-color: rgba(255,255,255,.45); }
+.first-cover:active { transform: scale(.97); }
+.first-cover.has { border: 0; box-shadow: 0 12px 32px rgba(0,0,0,.4); }
+.first-cover.has > * { display: none; }

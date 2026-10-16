@@ -134,6 +134,7 @@ async function load() {
     Object.assign(S, d, { online: true });
     store.set('tree', d);
     if (d.me?.needsDrive) return driveStep();
+    if (d.me && !d.me.isAdmin && !d.projects.length && !d.trash) firstProject();
     // once per session: if Backblaze is refusing files (key or daily limit), say so straight away
     if (!S.checkedStorage && S.tracks.length) { S.checkedStorage = true; storageProblem().then(why => why && toast(why, { error: true, ms: 15000 })); }
   } catch (e) {
@@ -800,14 +801,47 @@ function projectMenu(p) {
   ]);
 }
 
-// Upload target when not inside a project: an "Inbox" project, created on first use.
+// Upload target when not inside a project: the Inbox if there is one, otherwise the newest project,
+// and with no projects at all, the person makes their first one.
 async function targetProject() {
   if (S.view.type === 'project') return S.view.id;
   const inbox = S.projects.find(p => p.name === 'Inbox' && !p.folder_id);
   if (inbox) return inbox.id;
-  const { id } = await api('/projects', { method: 'POST', body: { name: 'Inbox' } });
-  await load();
-  return id;
+  const newest = [...S.projects].sort((a, b) => b.created_at - a.created_at)[0];
+  return newest ? newest.id : firstProject();
+}
+
+// New accounts start by making a project: a name and, if they like, cover art. Resolves with its id.
+function firstProject() {
+  if ($('#first-project')) return S.firstProject;
+  return (S.firstProject = new Promise(res => {
+    let file = null;
+    const cover = h('button', { type: 'button', className: 'first-cover', 'aria-label': 'Choose cover art', async onclick() {
+      const [f] = splitAccepted(await pickFiles(ACCEPT_IMAGE, false), 'cover');
+      if (!f) return;
+      file = f;
+      cover.style.backgroundImage = `url("${URL.createObjectURL(f)}")`;
+      cover.classList.add('has');
+    } }, icon('plus', 22), h('span', { className: 'mono' }, '[cover art]'));
+    const name = h('input', { type: 'text', required: true, maxLength: 200, placeholder: 'e.g. Summer beats', 'aria-label': 'Project name' });
+    const err = h('p', { className: 'form-err' });
+    const d = dialog(h('form', { id: 'first-project', className: 'stack first-project', async onsubmit(e) {
+      e.preventDefault();
+      const btn = this.querySelector('.primary');
+      btn.disabled = true; err.textContent = '';
+      try {
+        const { id } = await api('/projects', { method: 'POST', body: { name: name.value.trim() } });
+        if (file) await api(`/projects/${id}`, { method: 'PATCH', body: { cover: await uploadFile(await toJpeg(file)) } }).catch(oops);
+        S.view = { type: 'project', id }; store.set('view', S.view);
+        d.close(); await load(); res(id);
+      } catch (x) { err.textContent = x.message; btn.disabled = false; }
+    } }, h('h2', {}, 'Make your first project'),
+    h('p', { className: 'muted', style: { margin: 0 } }, 'Projects hold your tracks, like an album or a folder of ideas. You can make more any time.'),
+    cover, h('label', {}, 'Name', name), err,
+    h('button', { className: 'btn primary', style: { width: '100%', height: '42px' } }, 'Create project')));
+    d.addEventListener('cancel', e => e.preventDefault());
+    if (matchMedia("(pointer: fine)").matches) name.focus(); // no keyboard popping up on phones
+  }));
 }
 
 // ---- uploads --------------------------------------------------------------------------

@@ -802,8 +802,11 @@ async function shortcutUpload(req, env, url) {
   let saved;
   try { saved = await verify(env, key, 'audio', u); } catch (e) { return text(e.message, 400); }
 
+  // No project named: the Inbox if there is one, otherwise the newest project (only an empty library gets a new Inbox).
   const wanted = (url.searchParams.get('project') || '').trim() || 'Inbox';
   let project = await env.DB.prepare('SELECT id, name FROM projects WHERE name = ? COLLATE NOCASE AND deleted_at IS NULL AND owner_id = ?').bind(wanted, u.id).first();
+  if (!project && !url.searchParams.get('project'))
+    project = await env.DB.prepare('SELECT id, name FROM projects WHERE deleted_at IS NULL AND owner_id = ? ORDER BY created_at DESC LIMIT 1').bind(u.id).first();
   if (!project) {
     project = { id: uid(), name: wanted };
     await env.DB.prepare('INSERT INTO projects (id, name, folder_id, owner_id, created_at) VALUES (?, ?, NULL, ?, ?)').bind(project.id, wanted.slice(0, 200), u.id, now()).run();
