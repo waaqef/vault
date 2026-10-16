@@ -123,10 +123,21 @@ const S = {
   folders: [], projects: [], tracks: [], usage: 0, limit: 10e9, online: true,
   view: { type: 'home' }, homeFolder: null, sort: store.get('sort', 'newest'), q: '', tag: '',
   open: new Set(store.get('open', [])), offline: new Set(store.get('offline', [])),
-  filter: blankFilter(), select: null, trash: 0, comments: {},
+  filter: blankFilter(), select: null, trash: 0, comments: {}, sharedProjects: [], sharedTracks: [],
 };
-const projectOf = id => S.projects.find(p => p.id === id);
-const trackOf = id => S.tracks.find(t => t.id === id);
+const projectOf = id => S.projects.find(p => p.id === id) || S.sharedProjects.find(p => p.id === id);
+const trackOf = id => S.tracks.find(t => t.id === id) || S.sharedTracks.find(t => t.id === id);
+// Shared with me: projects people added me to (viewer or editor) and ones saved from a link. A single saved
+// track shows as its own little project. Viewers listen; editors can also change tracks; your own = 'owner'.
+const roleOf = pid => projectOf(pid)?.role || 'owner';
+const canEdit = pid => roleOf(pid) !== 'viewer';
+const isShared = pid => !!projectOf(pid)?.owner;
+function applyTree(d) {
+  Object.assign(S, d);
+  const sh = d.shared || { projects: [], tracks: [], singles: [] };
+  S.sharedProjects = [...sh.projects, ...sh.singles.map(t => ({ id: 'track:' + t.id, name: t.name, cover: t.cover || t.project_cover, owner: t.owner, role: 'viewer', single: t.id, created_at: t.created_at }))];
+  S.sharedTracks = [...sh.tracks, ...sh.singles.map(({ owner, project_cover, ...t }) => ({ ...t, project_id: 'track:' + t.id }))];
+}
 const setView = v => { S.view = v; S.arrange = false; S.select = null; store.set('view', v); document.body.classList.remove('side-open'); render(); };
 
 // Opened from a share page's "Sign in" / "Sign up": go back there once signed in. Only share links are allowed.
@@ -139,18 +150,18 @@ const takeNext = () => { try { const n = sessionStorage.getItem('next'); session
 async function load() {
   try {
     const d = await api('/tree');
-    Object.assign(S, d, { online: true });
+    applyTree(d); S.online = true;
     store.set('tree', d);
     if (d.me?.needsDrive) return driveStep();
     const next = takeNext();
     if (next) return location.replace(next);
-    if (d.me && !d.me.isAdmin && !d.projects.length && !d.trash) firstProject();
+    if (d.me && !d.me.isAdmin && !d.projects.length && !d.trash && !S.sharedProjects.length) firstProject(); // not for people who joined to listen to something shared
     // once per session: if Backblaze is refusing files (key or daily limit), say so straight away
     if (!S.checkedStorage && S.tracks.length) { S.checkedStorage = true; storageProblem().then(why => why && toast(why, { error: true, ms: 15000 })); }
   } catch (e) {
     if (e.message === 'Not logged in') return;
     const d = store.get('tree');
-    if (d) Object.assign(S, d);
+    if (d) applyTree(d);
     S.online = false;
     toast("You're offline. Showing your saved library.");
   }
@@ -295,16 +306,16 @@ function renderSide() {
     navItem('home', 'Home', '', 'home'),
     navItem('all', 'All tracks', S.tracks.length, 'music'),
     navItem('starred', 'Starred', S.tracks.filter(t => t.mark === 'star').length, 'star'),
-    navItem('offline', 'Downloaded', S.tracks.filter(isOffline).length, 'download'),
+    navItem('offline', 'Downloaded', [...S.tracks, ...S.sharedTracks].filter(isOffline).length, 'download'),
     navItem('trash', 'Recently deleted', S.trash || 0, 'trash'),
     h('div', { className: 'section', 'data-root': '', title: 'Drop here to move to the top level' }, h('span', { className: 'mono' }, '[library]'), h('span', { className: 'tools' },
       h('button', { className: 'icon-btn sm', title: 'New folder', 'aria-label': 'New folder', onclick: () => newFolder(null) }, icon('folderPlus', 16)),
       h('button', { className: 'icon-btn sm', title: 'New project', 'aria-label': 'New project', onclick: () => newProject(null) }, icon('plus', 16)))),
     tree(null, 0),
-    S.saved?.length > 0 && h('div', { className: 'section' }, h('span', { className: 'mono' }, '[shared with me]')),
-    (S.saved || []).map(x => h('a', { className: 'nav', href: `/s/${x.token}`, title: `${x.name}, shared by ${x.owner}` },
-      h('span', { className: 'caret' }), h('span', { className: 'thumb' + (x.cover ? '' : ' disc'), style: x.cover ? { backgroundImage: `url("/s/${x.token}/cover?k=${encodeURIComponent(x.cover)}")` } : {} }),
-      h('span', { className: 'label' }, x.name), h('span', { className: 'count' }, x.owner))),
+    S.sharedProjects.length > 0 && h('div', { className: 'section' }, h('span', { className: 'mono' }, '[shared with me]')),
+    S.sharedProjects.map(p => h('button', { className: 'nav' + (S.view.type === 'project' && S.view.id === p.id ? ' on' : ''), title: `${p.name}, shared by ${p.owner}${p.role === 'editor' ? ' (you can edit)' : ''}`,
+      onclick: () => setView({ type: 'project', id: p.id }) },
+      h('span', { className: 'caret' }), thumb(p.cover), h('span', { className: 'label' }, p.name), h('span', { className: 'count' }, p.owner))),
     h('button', { className: 'nav settings-nav', onclick: () => settingsDialog() }, icon('gear', 16), h('span', { className: 'label' }, 'Settings')),
     h('button', { className: 'meter mono', title: 'Manage storage', 'aria-label': `Storage: ${fmtBytes(S.usage)} of ${fmtBytes(S.limit)} used. Manage storage`, onclick: storageDialog },
       `${fmtBytes(S.usage)} / ${fmtBytes(S.limit)}`, h('div', { className: 'bar' + (pct > 90 ? ' full' : '') }, h('i', { style: { width: pct + '%' } }))),
@@ -312,8 +323,8 @@ function renderSide() {
 }
 
 function visibleTracks() {
-  let list = S.view.type === 'project' ? S.tracks.filter(t => t.project_id === S.view.id)
-    : S.view.type === 'offline' ? S.tracks.filter(isOffline)
+  let list = S.view.type === 'project' ? (isShared(S.view.id) ? S.sharedTracks : S.tracks).filter(t => t.project_id === S.view.id)
+    : S.view.type === 'offline' ? [...S.tracks, ...S.sharedTracks].filter(isOffline)
       : S.view.type === 'starred' ? S.tracks.filter(t => t.mark === 'star') : [...S.tracks];
   const q = S.q.toLowerCase();
   if (q) list = list.filter(t => [t.name, t.tags, t.notes, t.artist, projectOf(t.project_id)?.name].some(v => (v || '').toLowerCase().includes(q)));
@@ -345,6 +356,7 @@ function renderMain() {
   const p = S.view.type === 'project' && projectOf(S.view.id);
   const list = visibleTracks();
   const fc = filterCount();
+  const shared = p && p.owner, ro = p && !canEdit(p.id); // a shared project, and whether it's listen-only
 
   const toolbar = h('div', { className: 'toolbar' },
     h('button', { id: 'menu-btn', className: 'icon-btn', 'aria-label': 'Menu', onclick: () => document.body.classList.toggle('side-open') }, icon('menu', 20)),
@@ -361,8 +373,8 @@ function renderMain() {
       [['manual', 'Custom'], ['newest', 'Newest'], ['oldest', 'Oldest'], ['name', 'Name'], ['bpm', 'BPM'], ['key', 'Key'], ['length', 'Length']]
         .filter(([v]) => p || v !== 'manual').map(([v, l]) => h('option', { value: v, selected: S.sort === v }, l))),
     h('span', { className: 'grow' }),
-    h('button', { className: 'btn', onclick: recordDialog, disabled: !S.online, 'aria-label': 'Record' }, icon('mic', 16), h('span', { className: 'lbl' }, 'Record')),
-    h('button', { className: 'btn primary', disabled: !S.online, async onclick() { const f = await pickFiles(ACCEPT_AUDIO); f.length && uploadTracks(f, await targetProject()); }, 'aria-label': 'Upload' }, icon('upload', 16), h('span', { className: 'lbl' }, 'Upload')),
+    h('button', { className: 'btn', onclick: recordDialog, disabled: !S.online || ro, 'aria-label': 'Record' }, icon('mic', 16), h('span', { className: 'lbl' }, 'Record')),
+    h('button', { className: 'btn primary', disabled: !S.online || ro, title: ro ? 'You can listen to this project, not add to it' : null, async onclick() { const f = await pickFiles(ACCEPT_AUDIO); f.length && uploadTracks(f, await targetProject()); }, 'aria-label': 'Upload' }, icon('upload', 16), h('span', { className: 'lbl' }, 'Upload')),
   );
 
   if (S.view.type === 'home') return renderHome(toolbar);
@@ -375,25 +387,25 @@ function renderMain() {
       : S.select ? h('button', { className: 'btn primary', onclick: () => { S.select = null; renderMain(); } }, icon('check', 16), 'Done')
         : list.length > 0 && h('button', { className: 'btn primary', onclick: () => playList(list, 0, { shuffle: false }) }, icon('play', 14), 'Play'),
     !busy && list.length > 1 && h('button', { className: 'btn', 'aria-label': 'Shuffle', onclick: () => playList(list, Math.floor(Math.random() * list.length), { shuffle: true }) }, labelled('shuffle', 'Shuffle')),
-    p && !busy && list.length > 1 && h('button', { className: 'btn', 'aria-label': 'Rearrange', onclick: () => {
+    p && !ro && !busy && list.length > 1 && h('button', { className: 'btn', 'aria-label': 'Rearrange', onclick: () => {
       S.arrange = true;
       if (S.sort !== 'manual') { S.sort = 'manual'; store.set('sort', 'manual'); }
       renderMain();
     } }, labelled('grip', 'Rearrange')),
-    !busy && list.length > 0 && h('button', { className: 'btn', 'aria-label': 'Select tracks', onclick: () => { S.select = new Set(); renderMain(); } }, labelled('check', 'Select')),
+    !shared && !busy && list.length > 0 && h('button', { className: 'btn', 'aria-label': 'Select tracks', onclick: () => { S.select = new Set(); renderMain(); } }, labelled('check', 'Select')),
     S.arrange && h('span', { className: 'mono arrange-hint' }, '[drag the dots to reorder]'),
     S.select && h('span', { className: 'mono arrange-hint' }, '[tap tracks to select]'),
-    p && !busy && h('button', { className: 'btn', 'aria-label': 'Share', onclick: () => shareDialog('project', p.id, p.name) }, labelled('share', 'Share')),
+    p && !shared && !busy && h('button', { className: 'btn', 'aria-label': 'Share', onclick: () => shareDialog('project', p.id, p.name) }, labelled('share', 'Share')),
     p && !busy && h('button', { className: 'icon-btn', style: { background: 'var(--fill-2)' }, 'aria-label': 'Project options', onclick: () => projectMenu(p) }, icon('more', 18)),
   ];
   const dur = list.reduce((s, t) => s + (t.duration || 0), 0);
   const count = `${list.length} ${list.length === 1 ? 'track' : 'tracks'} · ${fmtTime(dur)}${fc ? ' · filtered' : ''}`;
   const hero = p
     ? h('div', { className: 'hero' },
-      h('button', { className: 'art' + (p.cover ? '' : ' disc'), style: bg(p.cover), 'aria-label': 'Change cover', onclick: () => setCover('projects', p) },
-        h('span', { className: 'hint' }, p.cover ? '[change cover]' : '[add cover]')),
+      h('button', { className: 'art' + (p.cover ? '' : ' disc') + (ro || p.single ? ' locked' : ''), style: bg(p.cover), 'aria-label': ro ? p.name : 'Change cover', onclick: () => !ro && !p.single && setCover('projects', p) },
+        !ro && !p.single && h('span', { className: 'hint' }, p.cover ? '[change cover]' : '[add cover]')),
       h('div', {},
-        h('div', { className: 'eyebrow' }, '[project]'),
+        h('div', { className: 'eyebrow' }, shared ? `[shared by ${p.owner} · ${p.role === 'editor' ? 'you can edit' : 'listen only'}]` : '[project]'),
         h('h1', {}, p.name),
         h('div', { className: 'meta mono' }, count),
         h('div', { className: 'actions' }, actions)))
@@ -495,7 +507,7 @@ function renderList(animate = false) {
     h('div', { className: 'trow thead' }, h('span'), h('span', {}, '[title]'), h('span', { className: 'c-wave' }), h('span', { className: 'cell c-bpm' }, '[bpm]'), h('span', { className: 'cell c-key' }, '[key]'), h('span', { className: 'cell' }, '[time]'), h('span'), h('span'), h('span')),
     list.map((t, i) => h('div', {
       className: 'trow' + (cur?.id === t.id ? ' on' : '') + (S.select?.has(t.id) ? ' selected' : '') + (t.mark === 'throw' ? ' throw' : '') + (justMarked?.id === t.id && justMarked.mark === 'throw' ? ' just-throw' : ''),
-      draggable: !S.arrange && !S.select, 'data-id': t.id, style: { '--i': i },
+      draggable: !S.arrange && !S.select && !isShared(t.project_id), 'data-id': t.id, style: { '--i': i },
       'aria-selected': S.select ? String(S.select.has(t.id)) : null,
       onclick() {
         if (this.dataset.swiped) return;
@@ -535,8 +547,8 @@ function renderList(animate = false) {
     h('span', { className: 'cell c-bpm num' }, t.bpm ? Math.round(t.bpm * 10) / 10 : '–'),
     h('span', { className: 'cell c-key num' }, t.musical_key || '–'),
     h('span', { className: 'cell num' }, fmtTime(t.duration)),
-    S.arrange || S.select ? markDot(t, 'star') : starBtn(t),
-    S.arrange || S.select ? markDot(t, 'throw') : throwBtn(t),
+    S.arrange || S.select ? markDot(t, 'star') : canEdit(t.project_id) ? starBtn(t) : h('span'),
+    S.arrange || S.select ? markDot(t, 'throw') : canEdit(t.project_id) ? throwBtn(t) : h('span'),
     S.arrange && p
       ? h('span', { className: 'grip', role: 'button', tabIndex: 0, 'aria-label': `Move ${t.name}. Drag, or use the arrow keys.`,
           onpointerdown(e) { startReorder(e, this.closest('.trow')); },
@@ -579,6 +591,7 @@ const throwBtn = (t, cls = '') => h('button', { className: 'icon-btn throw-btn '
 
 // Star = favourite, throwaway = probably not using it. One or the other (or neither). Shows straight away, saves in the background.
 async function setMark(t, mark) {
+  if (!canEdit(t.project_id)) return toast(`Only people who can edit “${projectOf(t.project_id)?.name}” can star tracks in it`, { quiet: true });
   const before = t.mark ?? null, all = [t, trackOf(t.id), cur?.id === t.id && cur, ...queue.filter(x => x.id === t.id)].filter(Boolean);
   all.forEach(x => { x.mark = mark; });
   justMarked = mark ? { id: t.id, mark } : null;
@@ -794,7 +807,23 @@ function folderMenu(f) {
   ]);
 }
 function projectMenu(p) {
-  const tracks = () => S.tracks.filter(t => t.project_id === p.id).sort((a, b) => a.position - b.position);
+  const tracks = () => [...S.tracks, ...S.sharedTracks].filter(t => t.project_id === p.id).sort((a, b) => a.position - b.position);
+  if (p.owner) { // shared with me
+    const ed = canEdit(p.id);
+    return sheet([
+      ed && { icon: 'pencil', label: 'Rename', async run() { const name = await prompt('Rename project', p.name); name && api(`/projects/${p.id}`, { method: 'PATCH', body: { name } }).then(load, oops); } },
+      ed && { icon: 'image', label: 'Change cover', run: () => setCover('projects', p) },
+      ed && { icon: 'gauge', label: 'Detect missing BPM & keys', run: () => detectTracks(tracks().filter(t => !t.bpm || !t.musical_key), false) },
+      ed && { icon: 'download', label: 'Download as ZIP', run: () => zipTracks(tracks(), p.name, p.cover) },
+      { icon: 'download', label: 'Save all offline', run: () => tracks().forEach(saveOffline) },
+      '-',
+      { icon: 'close', label: 'Remove from my library', danger: true, async run() {
+        if (!(await confirm(`Remove “${p.name}”?`, `It's ${p.owner}'s, so nothing is deleted. You just won't see it any more unless they share it again.`, 'Remove'))) return;
+        await api('/shared/leave', { method: 'POST', body: p.single ? { track_id: p.single } : { project_id: p.id } }).catch(oops);
+        setView({ type: 'home' }); load();
+      } },
+    ]);
+  }
   sheet([
     { icon: 'pencil', label: 'Rename', async run() { const name = await prompt('Rename project', p.name); name && api(`/projects/${p.id}`, { method: 'PATCH', body: { name } }).then(load, oops); } },
     { icon: 'folder', label: 'Move to folder…', async run() { const to = await folderPicker('Move project', p.folder_id); to !== undefined && api(`/projects/${p.id}`, { method: 'PATCH', body: { folder_id: to } }).then(load, oops); } },
@@ -870,8 +899,8 @@ function put(url, file, contentType, onProgress) {
     x.send(file);
   });
 }
-export async function uploadFile(file, onProgress = () => {}) {
-  const r = await api('/upload-url', { method: 'POST', body: { name: file.name, type: file.type, size: file.size } });
+export async function uploadFile(file, onProgress = () => {}, project_id) {
+  const r = await api('/upload-url', { method: 'POST', body: { name: file.name, type: file.type, size: file.size, project_id } });
   const reply = await put(r.url, file, r.contentType, onProgress);
   if (!r.drive) return r.key;
   const id = JSON.parse(reply || '{}').id; // Google Drive picks the file id and sends it back
@@ -931,7 +960,7 @@ async function pump() {
       const duration = await durationOf(job.file);
       const analysing = analyse(job.file, job.file.name, settings.detect);
       job.phase = 'Uploading';
-      const file_key = await uploadFile(job.file, p => { job.loaded = p * job.size; drawQueueSoon(); });
+      const file_key = await uploadFile(job.file, p => { job.loaded = p * job.size; drawQueueSoon(); }, job.project_id);
       job.phase = settings.detect ? 'Detecting BPM & key' : 'Drawing waveform'; job.loaded = job.size; drawQueue();
       const { bpm, key, peaks } = await analysing;
       job.found = [bpm && bpm + ' BPM', key].filter(Boolean).join(' · ');
@@ -1117,7 +1146,7 @@ async function setCover(table, item, file) {
   }
   const t = toast('Uploading cover…', { ms: 0 });
   try {
-    const cover = await uploadFile(await toJpeg(file));
+    const cover = await uploadFile(await toJpeg(file), undefined, table === 'projects' ? item.id : item.project_id);
     await api(`/${table}/${item.id}`, { method: 'PATCH', body: { cover } });
     await load();
   } catch (e) { oops(e); }
@@ -1177,23 +1206,24 @@ function trackMenu(t, list) {
   const manual = S.view.type === 'project' && S.sort === 'manual';
   const i = list.indexOf(t);
   const move = d => { const ids = list.map(x => x.id); ids.splice(i, 1); ids.splice(i + d, 0, t.id); reorder(ids); };
+  const ed = canEdit(t.project_id), own = !isShared(t.project_id); // shared tracks: viewers listen, editors change them
   sheet([
-    { icon: 'star', label: t.mark === 'star' ? 'Unstar' : 'Star', run: () => setMark(t, t.mark === 'star' ? null : 'star') },
-    { icon: 'ban', label: t.mark === 'throw' ? 'Not a throwaway' : 'Mark as throwaway', run: () => setMark(t, t.mark === 'throw' ? null : 'throw') },
-    '-',
+    ed && { icon: 'star', label: t.mark === 'star' ? 'Unstar' : 'Star', run: () => setMark(t, t.mark === 'star' ? null : 'star') },
+    ed && { icon: 'ban', label: t.mark === 'throw' ? 'Not a throwaway' : 'Mark as throwaway', run: () => setMark(t, t.mark === 'throw' ? null : 'throw') },
+    ed && '-',
     { icon: 'play', label: 'Play next', run: () => playNextTrack(t) },
     { icon: 'queue', label: 'Add to queue', run: () => addToQueue(t) },
     '-',
-    { icon: 'sliders', label: 'Edit audio', run: () => openEditor(t) },
-    { icon: 'info', label: 'Details, notes & versions', run: () => detailsDialog(t) },
-    { icon: 'gauge', label: 'Detect BPM & key', run: () => detectTracks([t], true) },
-    { icon: 'share', label: 'Share', run: () => shareDialog('track', t.id, t.name) },
+    ed && { icon: 'sliders', label: 'Edit audio', run: () => openEditor(t) },
+    ed && { icon: 'info', label: 'Details, notes & versions', run: () => detailsDialog(t) },
+    ed && { icon: 'gauge', label: 'Detect BPM & key', run: () => detectTracks([t], true) },
+    own && { icon: 'share', label: 'Share', run: () => shareDialog('track', t.id, t.name) },
     isOffline(t) ? { icon: 'close', label: 'Remove download', run: () => removeOffline(t) } : { icon: 'download', label: 'Save offline', run: () => saveOffline(t) },
-    { icon: 'download', label: 'Download file', run: () => downloadTrack(t) },
-    manual && i > 0 && { icon: 'up', label: 'Move up', run: () => move(-1) },
-    manual && i < list.length - 1 && { icon: 'down', label: 'Move down', run: () => move(1) },
-    '-',
-    { icon: 'trash', label: 'Move to trash', danger: true, async run() {
+    ed && { icon: 'download', label: 'Download file', run: () => downloadTrack(t) },
+    ed && manual && i > 0 && { icon: 'up', label: 'Move up', run: () => move(-1) },
+    ed && manual && i < list.length - 1 && { icon: 'down', label: 'Move down', run: () => move(1) },
+    ed && '-',
+    ed && { icon: 'trash', label: 'Move to trash', danger: true, async run() {
       await api(`/tracks/${t.id}`, { method: 'DELETE' }).catch(oops);
       load();
       toast(`Moved “${t.name}” to the trash`, { ms: 7000, action: { label: 'Undo', run: () => restore('track', t.id) } });
@@ -1795,7 +1825,7 @@ async function openEditor(t) {
   audio.pause();
   try {
     const { openEditor } = await import('./editor.js');
-    await openEditor(t, { api, toast, oops, dialog, prompt, confirm, uploadFile, audioBlob, onSaved: load, h, project: projectOf(t.project_id)?.name,
+    await openEditor(t, { api, toast, oops, dialog, prompt, confirm, uploadFile: (f, cb) => uploadFile(f, cb, t.project_id), audioBlob, onSaved: load, h, project: projectOf(t.project_id)?.name,
       startAt, autoplay, haptic, onClosed: back => editorClosed(t, back) });
   } catch (e) {
     // never fail silently: say what went wrong
@@ -1821,20 +1851,24 @@ async function editorClosed(t, { at, playing, saved }) {
 
 // ---- sharing --------------------------------------------------------------------------------
 async function shareDialog(kind, target_id, name) {
-  const list = h('div', { className: 'list' }, h('div', { className: 'muted' }, 'Loading…'));
+  const list = h('div', { className: 'list share-links' }, h('div', { className: 'muted' }, 'Loading…'));
   const pw = h('input', { type: 'text', placeholder: 'Optional', autocomplete: 'off' });
   const days = h('select', {}, SHARE_DAYS.map(([v, l]) => h('option', { value: v, selected: v === settings.shareDays }, l)));
   const dl = h('input', { type: 'checkbox', className: 'toggle', 'aria-label': 'Allow downloads' });
+  const pub = h('input', { type: 'checkbox', className: 'toggle', 'aria-label': 'Public link' });
   const link = token => `${location.origin}/s/${token}`;
   const copy = async token => { try { await navigator.clipboard.writeText(link(token)); toast('Link copied'); } catch { prompt('Copy this link', link(token), { label: 'Link', ok: 'Done' }); } };
   async function refresh() {
     const rows = await api(`/shares?kind=${kind}&target_id=${target_id}`).catch(e => (oops(e), []));
     list.replaceChildren(...(rows.length ? rows.map(s => h('div', { className: 'item', style: s.revoked ? { opacity: 0.45 } : {} },
-      s.has_password && h('span', { title: 'Password protected', style: { color: 'var(--fg-3)' } }, icon('lock', 14)),
+      !!s.has_password && h('span', { title: 'Password protected', style: { color: 'var(--fg-3)' } }, icon('lock', 14)),
       h('span', { className: 'grow mono' }, `${fmtDate(s.created_at)}${s.revoked ? ' · off' : s.expires_at ? ` · ${s.expires_at < Date.now() ? 'expired' : 'until ' + new Date(s.expires_at).toLocaleDateString()}` : ''}`),
       h('button', { type: 'button', className: 'btn ghost' + (s.allow_download ? ' on' : ''), 'aria-pressed': !!s.allow_download,
         title: s.allow_download ? 'Downloads allowed. Tap to turn off.' : 'Downloads off. Tap to allow.',
         onclick: () => api(`/shares/${s.token}`, { method: 'PATCH', body: { allow_download: !s.allow_download } }).then(refresh, oops) }, icon('download', 14), s.allow_download ? 'On' : 'Off'),
+      h('button', { type: 'button', className: 'btn ghost' + (s.public ? ' on' : ''), 'aria-pressed': !!s.public,
+        title: s.public ? 'Public: anyone with the link hears full songs. Tap to make it previews-only.' : 'Previews only unless signed in. Tap to make it public.',
+        onclick: () => api(`/shares/${s.token}`, { method: 'PATCH', body: { public: !s.public } }).then(refresh, oops) }, icon('globe', 14), s.public ? 'Public' : 'Accounts'),
       h('button', { type: 'button', className: 'btn ghost', title: 'Who listened', onclick: () => listensDialog(s.token) }, icon('headphones', 14), String(s.listens)),
       !s.revoked && h('button', { type: 'button', className: 'btn', onclick: () => copy(s.token) }, 'Copy'),
       h('button', { type: 'button', className: 'btn ghost', onclick: () => api(`/shares/${s.token}`, { method: 'PATCH', body: { revoked: !s.revoked } }).then(refresh, oops) }, s.revoked ? 'Turn on' : 'Turn off'),
@@ -1843,17 +1877,41 @@ async function shareDialog(kind, target_id, name) {
   const d = dialog(h('form', {
     async onsubmit(e) {
       e.preventDefault();
-      const r = await api('/shares', { method: 'POST', body: { kind, target_id, password: pw.value || null, days: days.value ? +days.value : null, allow_download: dl.checked } }).catch(oops);
+      const r = await api('/shares', { method: 'POST', body: { kind, target_id, password: pw.value || null, days: days.value ? +days.value : null, allow_download: dl.checked, public: pub.checked } }).catch(oops);
       if (r) { pw.value = ''; await refresh(); copy(r.token); }
     },
   }, h('h2', {}, `Share “${name}”`),
   h('div', { className: 'row2' }, h('label', {}, 'Password', pw), h('label', {}, 'Expires', days)),
   h('div', { className: 'set-row' }, h('div', { className: 't' }, 'Allow downloads', h('small', {}, 'Signed-in [vault] users can download the files. You can change this later for each link.')), dl),
-  h('p', { className: 'muted', style: { margin: 0, fontSize: '13px' } }, 'People signed in to [vault] hear full songs, can comment and can save this to their library. Everyone else hears 5-second previews.'),
+  h('div', { className: 'set-row' }, h('div', { className: 't' }, 'Public link', h('small', {}, 'Anyone with the link hears full songs, no account needed. Off: people signed in to [vault] hear full songs, everyone else 5-second previews.')), pub),
   h('div', { className: 'btns', style: { justifyContent: 'flex-start' } }, h('button', { className: 'btn primary' }, 'Create link')),
-  h('label', {}, 'Links · downloads · who listened', list),
+  h('label', {}, 'Links · downloads · public · who listened', list),
+  kind === 'project' && peopleSection(target_id),
   h('div', { className: 'btns' }, h('button', { type: 'button', className: 'btn ghost', onclick: () => d.close() }, 'Done'))));
   refresh();
+}
+
+// People on a project: add [vault] users by username as viewers (listen) or editors (add, remove, reorder and edit tracks).
+function peopleSection(projectId) {
+  const list = h('div', { className: 'list' });
+  const name = h('input', { type: 'text', placeholder: 'Username', autocapitalize: 'none', spellcheck: false, 'aria-label': 'Username' });
+  const role = h('select', { 'aria-label': 'Permission' }, h('option', { value: 'viewer' }, 'Can listen'), h('option', { value: 'editor' }, 'Can edit'));
+  const roleSel = m => h('select', { 'aria-label': `${m.username}'s permission`, onchange() { api(`/projects/${projectId}/members`, { method: 'POST', body: { username: m.username, role: this.value } }).then(draw, oops); } },
+    h('option', { value: 'viewer', selected: m.role === 'viewer' }, 'Can listen'), h('option', { value: 'editor', selected: m.role === 'editor' }, 'Can edit'));
+  async function draw() {
+    const people = await api(`/projects/${projectId}/members`).catch(e => (oops(e), []));
+    fill(list, people.length ? people.map(m => h('div', { className: 'item' }, avatarEl(m), h('span', { className: 'grow' }, m.username), roleSel(m),
+      h('button', { type: 'button', className: 'icon-btn sm', 'aria-label': `Remove ${m.username}`, onclick: () => api(`/projects/${projectId}/members/${m.id}`, { method: 'DELETE' }).then(draw, oops) }, icon('close', 14))))
+      : h('div', { className: 'muted' }, 'Only you so far.'));
+  }
+  async function add() {
+    if (!name.value.trim()) return;
+    try { await api(`/projects/${projectId}/members`, { method: 'POST', body: { username: name.value.trim(), role: role.value } }); toast(`Added ${name.value.trim()}`); name.value = ''; draw(); } catch (e) { oops(e); }
+  }
+  name.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); add(); } };
+  draw();
+  return h('label', {}, 'People with access', h('div', { className: 'people-add' }, name, role, h('button', { type: 'button', className: 'btn', onclick: add }, 'Add')), list,
+    h('small', { className: 'people-note' }, 'It shows up in their library under [shared with me]. Editors can add, remove, reorder and edit tracks; only you can delete the project or share it.'));
 }
 
 // Who listened, how many times, and how far into each track they got.
@@ -1918,7 +1976,7 @@ async function recordDialog() {
     try {
       const pid = await targetProject();
       const t = toast('Saving recording…', { ms: 0 });
-      const file_key = await uploadFile(file);
+      const file_key = await uploadFile(file, undefined, pid);
       await api('/tracks', { method: 'POST', body: { project_id: pid, name: baseName(file.name), file_key, duration } });
       t.remove(); toast('Recording saved'); load();
     } catch (e) { oops(e); }
@@ -2114,9 +2172,12 @@ async function peopleDialog() {
     h('div', { className: 'btns' }, h('button', { className: 'btn primary', onclick: () => d.close() }, 'Done'))), { className: 'settings-dlg' });
   const copy = async text => { try { await navigator.clipboard.writeText(text); toast('Copied', { ms: 1200 }); } catch { prompt('Copy this', text, { label: 'Code', ok: 'Done' }); } };
   async function draw() {
-    const [users, invites] = await Promise.all([api('/admin/users'), api('/admin/invites')]).catch(e => (oops(e), [[], []]));
+    const [users, invites, requests] = await Promise.all([api('/admin/users'), api('/admin/invites'), api('/admin/requests')]).catch(e => (oops(e), [[], [], []]));
     const open = invites;
     fill(box,
+      requests.length > 0 && h('div', { className: 'set-sec' }, h('h3', {}, '[invite requests]'),
+        requests.map(r => h('div', { className: 'set-row' }, h('div', { className: 't' }, r.name, h('small', {}, [r.contact, r.message, fmtAdded(r.created_at)].filter(Boolean).join(' · '))),
+          h('button', { className: 'btn ghost', onclick: () => api(`/admin/requests/${r.id}`, { method: 'DELETE' }).then(draw, oops) }, 'Dismiss')))),
       h('div', { className: 'set-sec' }, h('h3', {}, '[invite codes]'),
         h('p', { className: 'muted', style: { margin: 0 } }, 'Each code makes one account. Send it to someone, and they choose “Sign up” on the login screen.'),
         open.map(i => h('div', { className: 'set-row' + (i.used_by ? ' used' : '') }, h('div', { className: 't' }, h('code', { className: 'mono' }, i.code),

@@ -157,6 +157,19 @@ const MY_PROJECTS = '(SELECT id FROM projects WHERE owner_id = ?)';
 const ownProject = (env, u, id) => env.DB.prepare('SELECT * FROM projects WHERE id = ? AND owner_id = ?').bind(id, u.id).first();
 const ownFolder = (env, u, id) => env.DB.prepare('SELECT * FROM folders WHERE id = ? AND owner_id = ?').bind(id, u.id).first();
 const ownTrack = (env, u, id) => env.DB.prepare(`SELECT * FROM tracks WHERE id = ? AND project_id IN ${MY_PROJECTS}`).bind(id, u.id).first();
+// Shared projects. EDITABLE: your own, and ones you were added to as an editor. READABLE: also ones you were
+// added to as a viewer, and ones saved to your library from a share link that still works (a linked copy).
+// Files always live in the project owner's storage, whoever adds them.
+const EDITABLE = `(SELECT id FROM projects WHERE owner_id = ? UNION SELECT project_id FROM project_members WHERE user_id = ? AND role = 'editor')`;
+const editArgs = u => [u.id, u.id];
+const LINKED = kind => `(SELECT s.target_id FROM saved_shares v JOIN shares s ON s.token = v.token WHERE v.user_id = ? AND s.kind = '${kind}' AND s.revoked = 0 AND (s.expires_at IS NULL OR s.expires_at > ?))`;
+const READABLE = `(SELECT id FROM projects WHERE owner_id = ? UNION SELECT project_id FROM project_members WHERE user_id = ? UNION ${LINKED('project').slice(1, -1)})`;
+const readArgs = u => [u.id, u.id, u.id, now()];
+const editProject = (env, u, id) => env.DB.prepare(`SELECT * FROM projects WHERE id = ? AND deleted_at IS NULL AND id IN ${EDITABLE}`).bind(id, ...editArgs(u)).first();
+const editTrack = (env, u, id) => env.DB.prepare(`SELECT t.*, p.owner_id FROM tracks t JOIN projects p ON p.id = t.project_id WHERE t.id = ? AND t.project_id IN ${EDITABLE}`).bind(id, ...editArgs(u)).first();
+const readTrack = (env, u, id) => env.DB.prepare(`SELECT t.*, p.owner_id FROM tracks t JOIN projects p ON p.id = t.project_id WHERE t.id = ? AND t.deleted_at IS NULL AND p.deleted_at IS NULL AND (t.project_id IN ${READABLE} OR t.id IN ${LINKED('track')})`).bind(id, ...readArgs(u), u.id, now()).first();
+// The account whose storage holds a project's files.
+const storeOf = (env, ownerId, u) => (ownerId === u.id ? u : getUser(env, ownerId));
 // Who owns a project / track (for deletes and share pages).
 const projectOwner = async (env, projectId) => {
   const p = await env.DB.prepare('SELECT owner_id FROM projects WHERE id = ?').bind(projectId).first();
@@ -208,6 +221,7 @@ async function deleteProject(env, id) {
   await remove(env, p.cover, await getUser(env, p.owner_id));
   await env.DB.batch([
     env.DB.prepare("DELETE FROM shares WHERE kind = 'project' AND target_id = ?").bind(id),
+    env.DB.prepare('DELETE FROM project_members WHERE project_id = ?').bind(id),
     env.DB.prepare('DELETE FROM projects WHERE id = ?').bind(id),
   ]);
 }
@@ -222,14 +236,14 @@ async function purgeOldTrash(env) {
   for (const r of t.results) await deleteTrack(env, r.id);
 }
 
-// Shared projects/tracks saved to a library: only while the link still works.
-const SAVED = `SELECT s.token, s.kind, COALESCE(p.name, t.name) AS name, COALESCE(p.cover, t.cover, tp.cover) AS cover, u.username AS owner
-  FROM saved_shares v JOIN shares s ON s.token = v.token
-  LEFT JOIN projects p ON s.kind = 'project' AND p.id = s.target_id AND p.deleted_at IS NULL
-  LEFT JOIN tracks t ON s.kind = 'track' AND t.id = s.target_id AND t.deleted_at IS NULL
-  LEFT JOIN projects tp ON tp.id = t.project_id AND tp.deleted_at IS NULL
-  JOIN users u ON u.id = COALESCE(p.owner_id, tp.owner_id)
-  WHERE v.user_id = ? AND s.revoked = 0 AND (s.expires_at IS NULL OR s.expires_at > ?) ORDER BY v.created_at DESC`;
+// Projects shared with this user (added as a viewer/editor, or saved from a link), and single saved tracks.
+const SHARED_P = `SELECT p.id, p.name, p.cover, p.created_at, u.username AS owner,
+    COALESCE((SELECT role FROM project_members m WHERE m.project_id = p.id AND m.user_id = ?), 'viewer') AS role,
+    EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = p.id AND m.user_id = ?) AS member
+  FROM projects p JOIN users u ON u.id = p.owner_id WHERE p.deleted_at IS NULL AND p.owner_id != ? AND p.id IN ${READABLE} ORDER BY p.name COLLATE NOCASE`;
+const SHARED_T = `SELECT * FROM tracks WHERE deleted_at IS NULL AND project_id IN (SELECT p.id FROM projects p WHERE p.deleted_at IS NULL AND p.owner_id != ? AND p.id IN ${READABLE}) ORDER BY position, created_at`;
+const SAVED_T = `SELECT t.*, u.username AS owner, p.cover AS project_cover FROM tracks t JOIN projects p ON p.id = t.project_id JOIN users u ON u.id = p.owner_id
+  WHERE t.deleted_at IS NULL AND p.deleted_at IS NULL AND p.owner_id != ? AND t.id IN ${LINKED('track')} AND t.project_id NOT IN ${READABLE}`;
 
 const liveTracks = `deleted_at IS NULL AND project_id IN (SELECT id FROM projects WHERE deleted_at IS NULL AND owner_id = ?)`;
 
@@ -244,8 +258,13 @@ on('GET', '/api/tree', async (req, env, b, p, url, ctx, u) => {
   ]);
   const comments = Object.fromEntries(cm.results.map(r => [r.track_id, r.n]));
   const s = await space(env, u);
-  const saved = (await env.DB.prepare(SAVED).bind(u.id, now()).all()).results;
-  return json({ folders: f.results, projects: pr.results, tracks: t.results, comments, trash: tr.results[0].n, saved,
+  const [sp, st, sv] = await env.DB.batch([
+    env.DB.prepare(SHARED_P).bind(u.id, u.id, u.id, ...readArgs(u)),
+    env.DB.prepare(SHARED_T).bind(u.id, ...readArgs(u)),
+    env.DB.prepare(SAVED_T).bind(u.id, u.id, now(), ...readArgs(u)),
+  ]);
+  return json({ folders: f.results, projects: pr.results, tracks: t.results, comments, trash: tr.results[0].n,
+    shared: { projects: sp.results, tracks: st.results, singles: sv.results },
     usage: s.usage, limit: s.limit, me: publicUser(u, { driveEmail: s.email || '', needsDrive: usesDrive(env, u) && !u.drive_refresh }) });
 });
 
@@ -291,12 +310,14 @@ on('POST', '/api/projects', async (req, env, b, p, url, ctx, u) => {
   return json({ id });
 });
 on('PATCH', '/api/projects/:id', async (req, env, b, { id }, url, ctx, u) => {
-  const old = await ownProject(env, u, id);
+  const old = await editProject(env, u, id);
   if (!old) return fail('Not found', 404);
+  if (old.owner_id !== u.id) delete b.folder_id; // folders are the owner's own
   if (b.folder_id && !(await ownFolder(env, u, b.folder_id))) return fail('Folder not found', 404);
-  if (b.cover) await verify(env, b.cover, 'cover', u);
+  const owner = await storeOf(env, old.owner_id, u);
+  if (b.cover) await verify(env, b.cover, 'cover', owner);
   await update(env, 'projects', id, b, ['name', 'folder_id', 'cover']);
-  if ('cover' in b && old.cover && old.cover !== b.cover) await remove(env, old.cover, u);
+  if ('cover' in b && old.cover && old.cover !== b.cover) await remove(env, old.cover, owner);
   return json({ ok: true });
 });
 // Deleting moves it to the trash; it's removed for good after 30 days or when emptied.
@@ -315,10 +336,17 @@ on('POST', '/api/upload-url', async (req, env, b, p, url, ctx, u) => {
   if (b.type && b.type !== 'application/octet-stream' && !b.type.startsWith(top)) return fail(`${b.name} isn't an audio file or cover image`);
   if (!(b.size > 0) || b.size > MAX[kind]) return fail(`${b.name} is too big (max ${MAX[kind] / 1024 ** 2} MB)`);
   const type = contentType(b.name);
-  if (usesDrive(env, u)) {
-    const s = await space(env, u);
-    if (s.usage + b.size > s.limit) return fail('Your Google Drive is full. Delete old versions or empty the trash, or free up space in Drive.', 507);
-    const session = await drive.uploadSession(env, u, { name: String(b.name).slice(0, 200), type, size: b.size, origin: url.origin });
+  let store = u; // a shared project's files go in its owner's storage
+  if (b.project_id) {
+    const proj = await editProject(env, u, b.project_id);
+    if (!proj) return fail("You can't add to that project", 403);
+    store = await storeOf(env, proj.owner_id, u);
+  }
+  if (usesDrive(env, store)) {
+    if (!store.drive_refresh) return fail(store === u ? "Google Drive isn't connected. Open Settings → Account → Connect." : "The project owner's Google Drive isn't connected.", 409);
+    const s = await space(env, store);
+    if (s.usage + b.size > s.limit) return fail(store === u ? 'Your Google Drive is full. Delete old versions or empty the trash, or free up space in Drive.' : "The project owner's Google Drive is full.", 507);
+    const session = await drive.uploadSession(env, store, { name: String(b.name).slice(0, 200), type, size: b.size, origin: url.origin });
     return json({ drive: kind, contentType: type, url: session });
   }
   if ((await adminUsage(env)) + b.size > STORAGE_LIMIT) return fail('Storage full (10 GB). Delete old versions or empty the trash to make room.', 507);
@@ -339,47 +367,51 @@ async function createTrack(env, b, size) {
   return id;
 }
 on('POST', '/api/tracks', async (req, env, b, p, url, ctx, u) => {
-  const proj = await ownProject(env, u, b.project_id);
-  if (!proj || proj.deleted_at) return fail('Project not found', 404);
-  const size = await verify(env, b.file_key, 'audio', u);
+  const proj = await editProject(env, u, b.project_id);
+  if (!proj) return fail('Project not found', 404);
+  const size = await verify(env, b.file_key, 'audio', await storeOf(env, proj.owner_id, u));
   return json({ id: await createTrack(env, b, size) });
 });
 const TRACK_FIELDS = ['name', 'project_id', 'bpm', 'musical_key', 'tags', 'cover', 'position', 'notes', 'artist', 'duration', 'peaks', 'mark'];
 on('PATCH', '/api/tracks/:id', async (req, env, b, { id }, url, ctx, u) => {
-  const old = await ownTrack(env, u, id);
+  const old = await editTrack(env, u, id);
   if (!old) return fail('Not found', 404);
-  if (b.project_id && !(await ownProject(env, u, b.project_id))) return fail('Project not found', 404);
-  if (b.cover) await verify(env, b.cover, 'cover', u);
+  // Moving is only within the same owner's projects (the file stays in that owner's storage).
+  if (b.project_id && (await editProject(env, u, b.project_id))?.owner_id !== old.owner_id) return fail('Project not found', 404);
+  const owner = await storeOf(env, old.owner_id, u);
+  if (b.cover) await verify(env, b.cover, 'cover', owner);
   if (typeof b.notes === 'string') b.notes = b.notes.slice(0, 20000);
   if (typeof b.artist === 'string') b.artist = b.artist.slice(0, 120);
   if ('peaks' in b) b.peaks = peaksOrNull(b.peaks);
   if ('mark' in b) b.mark = ['star', 'throw'].includes(b.mark) ? b.mark : null; // favourite / throwaway
   await update(env, 'tracks', id, b, TRACK_FIELDS);
-  if ('cover' in b && old.cover && old.cover !== b.cover) await remove(env, old.cover, u);
+  if ('cover' in b && old.cover && old.cover !== b.cover) await remove(env, old.cover, owner);
   return json({ ok: true });
 });
 on('POST', '/api/tracks/reorder', async (req, env, b, p, url, ctx, u) => {
-  await env.DB.batch((b.ids || []).slice(0, 2000).map((id, i) => env.DB.prepare(`UPDATE tracks SET position = ? WHERE id = ? AND project_id IN ${MY_PROJECTS}`).bind(i, id, u.id)));
+  await env.DB.batch((b.ids || []).slice(0, 2000).map((id, i) => env.DB.prepare(`UPDATE tracks SET position = ? WHERE id = ? AND project_id IN ${EDITABLE}`).bind(i, id, ...editArgs(u))));
   return json({ ok: true });
 });
 // Several tracks at once: move to a project, set the producer, star/throwaway, or send to the trash.
 on('POST', '/api/tracks/bulk', async (req, env, b, p, url, ctx, u) => {
   const ids = (b.ids || []).slice(0, 2000);
   if (!ids.length) return json({ ok: true });
-  if (b.set?.project_id && !(await ownProject(env, u, b.set.project_id))) return fail('Project not found', 404);
-  const mine = `AND project_id IN ${MY_PROJECTS}`;
+  const target = b.set?.project_id && await editProject(env, u, b.set.project_id);
+  if (b.set?.project_id && !target) return fail('Project not found', 404);
+  // Editable tracks only; a move only takes tracks that belong to the target's owner.
+  const mine = `AND project_id IN (SELECT id FROM projects WHERE owner_id = ? UNION SELECT project_id FROM project_members WHERE user_id = ? AND role = 'editor')`;
   const stmts = [];
   for (const id of ids) {
-    if (b.trash) stmts.push(env.DB.prepare(`UPDATE tracks SET deleted_at = ? WHERE id = ? ${mine}`).bind(now(), id, u.id));
-    if (b.set?.project_id) stmts.push(env.DB.prepare(`UPDATE tracks SET project_id = ? WHERE id = ? ${mine}`).bind(b.set.project_id, id, u.id));
-    if (b.set && 'mark' in b.set) stmts.push(env.DB.prepare(`UPDATE tracks SET mark = ? WHERE id = ? ${mine}`).bind(['star', 'throw'].includes(b.set.mark) ? b.set.mark : null, id, u.id));
-    if (typeof b.set?.artist === 'string') stmts.push(env.DB.prepare(`UPDATE tracks SET artist = ? WHERE id = ? ${mine}`).bind(b.set.artist.slice(0, 120), id, u.id));
+    if (b.trash) stmts.push(env.DB.prepare(`UPDATE tracks SET deleted_at = ? WHERE id = ? ${mine}`).bind(now(), id, ...editArgs(u)));
+    if (b.set?.project_id) stmts.push(env.DB.prepare(`UPDATE tracks SET project_id = ? WHERE id = ? ${mine} AND project_id IN (SELECT id FROM projects WHERE owner_id = ?)`).bind(b.set.project_id, id, ...editArgs(u), target.owner_id));
+    if (b.set && 'mark' in b.set) stmts.push(env.DB.prepare(`UPDATE tracks SET mark = ? WHERE id = ? ${mine}`).bind(['star', 'throw'].includes(b.set.mark) ? b.set.mark : null, id, ...editArgs(u)));
+    if (typeof b.set?.artist === 'string') stmts.push(env.DB.prepare(`UPDATE tracks SET artist = ? WHERE id = ? ${mine}`).bind(b.set.artist.slice(0, 120), id, ...editArgs(u)));
   }
   for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
   return json({ ok: true });
 });
 on('DELETE', '/api/tracks/:id', async (req, env, b, { id }, url, ctx, u) => {
-  await env.DB.prepare(`UPDATE tracks SET deleted_at = ? WHERE id = ? AND project_id IN ${MY_PROJECTS}`).bind(now(), id, u.id).run();
+  await env.DB.prepare(`UPDATE tracks SET deleted_at = ? WHERE id = ? AND project_id IN ${EDITABLE}`).bind(now(), id, ...editArgs(u)).run(); // goes to the owner's trash
   return json({ ok: true });
 });
 
@@ -413,12 +445,13 @@ on('POST', '/api/trash/empty', async (req, env, b, p, url, ctx, u) => {
 
 // Versions: applying an edit adds a version and points the track at it. Older versions stay for revert.
 on('GET', '/api/tracks/:id/versions', async (req, env, b, { id }, url, ctx, u) => {
-  if (!(await ownTrack(env, u, id))) return fail('Not found', 404);
+  if (!(await editTrack(env, u, id))) return fail('Not found', 404);
   return json((await env.DB.prepare('SELECT * FROM track_versions WHERE track_id = ? ORDER BY created_at DESC').bind(id).all()).results);
 });
 on('POST', '/api/tracks/:id/versions', async (req, env, b, { id }, url, ctx, u) => {
-  if (!(await ownTrack(env, u, id))) return fail('Not found', 404);
-  const size = await verify(env, b.file_key, 'audio', u);
+  const t = await editTrack(env, u, id);
+  if (!t) return fail('Not found', 404);
+  const size = await verify(env, b.file_key, 'audio', await storeOf(env, t.owner_id, u));
   await env.DB.batch([
     env.DB.prepare('INSERT INTO track_versions (id, track_id, file_key, size, duration, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
       .bind(uid(), id, b.file_key, size, b.duration || null, (b.note || 'Edit').slice(0, 300), now()),
@@ -426,7 +459,7 @@ on('POST', '/api/tracks/:id/versions', async (req, env, b, { id }, url, ctx, u) 
   ]);
   return json({ ok: true });
 });
-const ownVersion = (env, u, id) => env.DB.prepare(`SELECT v.*, t.file_key AS current FROM track_versions v JOIN tracks t ON t.id = v.track_id WHERE v.id = ? AND t.project_id IN ${MY_PROJECTS}`).bind(id, u.id).first();
+const ownVersion = (env, u, id) => env.DB.prepare(`SELECT v.*, t.file_key AS current, p.owner_id FROM track_versions v JOIN tracks t ON t.id = v.track_id JOIN projects p ON p.id = t.project_id WHERE v.id = ? AND t.project_id IN ${EDITABLE}`).bind(id, ...editArgs(u)).first();
 on('POST', '/api/versions/:id/use', async (req, env, b, { id }, url, ctx, u) => {
   const v = await ownVersion(env, u, id);
   if (!v) return fail('Not found', 404);
@@ -437,7 +470,7 @@ on('DELETE', '/api/versions/:id', async (req, env, b, { id }, url, ctx, u) => {
   const v = await ownVersion(env, u, id);
   if (!v) return fail('Not found', 404);
   if (v.file_key === v.current) return fail("That's the version in use. Switch to another one first.");
-  await remove(env, v.file_key, u);
+  await remove(env, v.file_key, await storeOf(env, v.owner_id, u));
   await env.DB.prepare('DELETE FROM track_versions WHERE id = ?').bind(id).run();
   return json({ ok: true });
 });
@@ -479,11 +512,11 @@ on('GET', '/api/storage', async (req, env, b, p, url, ctx, u) => {
 
 // Comments listeners left on share links
 on('GET', '/api/tracks/:id/comments', async (req, env, b, { id }, url, ctx, u) => {
-  if (!(await ownTrack(env, u, id))) return fail('Not found', 404);
+  if (!(await editTrack(env, u, id))) return fail('Not found', 404);
   return json((await env.DB.prepare('SELECT id, name, at, body, created_at FROM comments WHERE track_id = ? ORDER BY created_at DESC LIMIT 500').bind(id).all()).results);
 });
 on('DELETE', '/api/comments/:id', async (req, env, b, { id }, url, ctx, u) => {
-  await env.DB.prepare(`DELETE FROM comments WHERE id = ? AND track_id IN (SELECT id FROM tracks WHERE project_id IN ${MY_PROJECTS})`).bind(id, u.id).run();
+  await env.DB.prepare(`DELETE FROM comments WHERE id = ? AND track_id IN (SELECT id FROM tracks WHERE project_id IN ${EDITABLE})`).bind(id, ...editArgs(u)).run();
   return json({ ok: true });
 });
 
@@ -509,34 +542,45 @@ const fileUrl = key => (drive.isDriveKey(key) ? `/api/file/drive/${drive.driveKi
 on('GET', '/api/audio/:id', async (req, env, b, { id }, url, ctx, u) => {
   const v = url.searchParams.get('v');
   const row = v
-    ? await env.DB.prepare(`SELECT v.file_key FROM track_versions v JOIN tracks t ON t.id = v.track_id WHERE v.id = ? AND v.track_id = ? AND t.project_id IN ${MY_PROJECTS}`).bind(v, id, u.id).first()
-    : await ownTrack(env, u, id);
+    ? await env.DB.prepare(`SELECT v.file_key, p.owner_id FROM track_versions v JOIN tracks t ON t.id = v.track_id JOIN projects p ON p.id = t.project_id WHERE v.id = ? AND v.track_id = ? AND t.project_id IN ${EDITABLE}`).bind(v, id, ...editArgs(u)).first()
+    : await readTrack(env, u, id);
   if (!row) return fail('Not found', 404);
   if (url.searchParams.has('json')) return json({ url: fileUrl(row.file_key) });
-  return streamFile(env, req, row.file_key, u);
+  return streamFile(env, req, row.file_key, await storeOf(env, row.owner_id, u));
 });
 // A file of the signed-in user's (any version of any of their tracks).
-const ownsFile = (env, u, key) => env.DB.prepare(`SELECT 1 FROM track_versions v JOIN tracks t ON t.id = v.track_id WHERE v.file_key = ? AND t.project_id IN ${MY_PROJECTS} LIMIT 1`).bind(key, u.id).first();
-const ownsCover = (env, u, key) => env.DB.prepare(`SELECT 1 FROM projects WHERE cover = ? AND owner_id = ? UNION SELECT 1 FROM tracks WHERE cover = ? AND project_id IN ${MY_PROJECTS} LIMIT 1`).bind(key, u.id, key, u.id).first();
+// Whose file is this, if this user may open it? Returns the account whose storage holds it (or null).
+async function fileOwner(env, u, key) {
+  const r = await env.DB.prepare(`SELECT p.owner_id FROM track_versions v JOIN tracks t ON t.id = v.track_id JOIN projects p ON p.id = t.project_id
+    WHERE v.file_key = ? AND (t.project_id IN ${READABLE} OR t.id IN ${LINKED('track')}) LIMIT 1`).bind(key, ...readArgs(u), u.id, now()).first();
+  return r && storeOf(env, r.owner_id, u);
+}
+async function coverOwner(env, u, key) {
+  const r = await env.DB.prepare(`SELECT owner_id FROM projects WHERE cover = ? AND (id IN ${READABLE} OR id IN (SELECT project_id FROM tracks WHERE id IN ${LINKED('track')}))
+    UNION SELECT p.owner_id FROM tracks t JOIN projects p ON p.id = t.project_id WHERE t.cover = ? AND (t.project_id IN ${READABLE} OR t.id IN ${LINKED('track')}) LIMIT 1`)
+    .bind(key, ...readArgs(u), u.id, now(), key, ...readArgs(u), u.id, now()).first();
+  return r && storeOf(env, r.owner_id, u);
+}
 on('GET', '/api/file/audio/:name', async (req, env, b, { name }, url, ctx, u) => {
-  const key = `audio/${name}`;
-  return (await ownsFile(env, u, key)) ? streamFile(env, req, key, u) : fail('Not found', 404);
+  const key = `audio/${name}`, owner = await fileOwner(env, u, key);
+  return owner ? streamFile(env, req, key, owner) : fail('Not found', 404);
 });
 on('GET', '/api/file/drive/:kind/:id', async (req, env, b, { kind, id }, url, ctx, u) => {
   const key = `drive:${kind}:${id}`;
-  const mine = kind === 'cover' ? await ownsCover(env, u, key) : await ownsFile(env, u, key);
-  if (!mine) return fail('Not found', 404);
-  return kind === 'cover' ? coverFile(env, key, 'private', u) : streamFile(env, req, key, u);
+  const owner = kind === 'cover' ? await coverOwner(env, u, key) : await fileOwner(env, u, key);
+  if (!owner) return fail('Not found', 404);
+  return kind === 'cover' ? coverFile(env, key, 'private', owner) : streamFile(env, req, key, owner);
 });
 on('GET', '/api/cover/cover/:name', async (req, env, b, { name }, url, ctx, u) => {
-  const key = `cover/${name}`;
-  if (!(await ownsCover(env, u, key))) return fail('Not found', 404);
-  return url.searchParams.has('json') ? json({ url: `/api/cover/${key}` }) : coverFile(env, key, 'private', u);
+  const key = `cover/${name}`, owner = await coverOwner(env, u, key);
+  if (!owner) return fail('Not found', 404);
+  return url.searchParams.has('json') ? json({ url: `/api/cover/${key}` }) : coverFile(env, key, 'private', owner);
 });
 on('GET', '/api/cover/:key', async (req, env, b, { key }, url, ctx, u) => {
   key = decodeURIComponent(key);
-  if (!drive.DRIVE_KEY_RE.test(key) || !(await ownsCover(env, u, key))) return fail('Not found', 404);
-  return url.searchParams.has('json') ? json({ url: fileUrl(key) }) : coverFile(env, key, 'private', u);
+  const owner = drive.DRIVE_KEY_RE.test(key) && await coverOwner(env, u, key);
+  if (!owner) return fail('Not found', 404);
+  return url.searchParams.has('json') ? json({ url: fileUrl(key) }) : coverFile(env, key, 'private', owner);
 });
 // Covers never change (a new cover gets a new name), so they're served from here and cached by the browser for a year.
 async function coverFile(env, key, scope, owner) {
@@ -578,7 +622,7 @@ on('GET', '/api/shares', async (req, env, b, p, url, ctx, u) => {
   const kind = url.searchParams.get('kind'), target = url.searchParams.get('target_id');
   if (!(await ownsTarget(env, u, kind, target))) return json([]);
   const { results } = await env.DB.prepare(
-    'SELECT s.token, s.expires_at, s.revoked, s.allow_download, s.created_at, s.password_hash IS NOT NULL AS has_password, (SELECT COUNT(*) FROM listens l WHERE l.share_token = s.token) AS listens FROM shares s WHERE kind = ? AND target_id = ? ORDER BY created_at DESC'
+    'SELECT s.token, s.expires_at, s.revoked, s.allow_download, s.public, s.created_at, s.password_hash IS NOT NULL AS has_password, (SELECT COUNT(*) FROM listens l WHERE l.share_token = s.token) AS listens FROM shares s WHERE kind = ? AND target_id = ? ORDER BY created_at DESC'
   ).bind(kind, target).all();
   return json(results);
 });
@@ -586,19 +630,52 @@ on('POST', '/api/shares', async (req, env, b, p, url, ctx, u) => {
   if (!['project', 'track'].includes(b.kind)) return fail('Bad share');
   if (!(await ownsTarget(env, u, b.kind, b.target_id))) return fail('Not found', 404);
   const token = uid().replace(/-/g, '');
-  await env.DB.prepare('INSERT INTO shares (token, kind, target_id, password_hash, expires_at, allow_download, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-    .bind(token, b.kind, b.target_id, b.password ? await hmac(token, b.password) : null, b.days ? now() + b.days * DAY : null, b.allow_download ? 1 : 0, now()).run();
+  await env.DB.prepare('INSERT INTO shares (token, kind, target_id, password_hash, expires_at, allow_download, public, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+    .bind(token, b.kind, b.target_id, b.password ? await hmac(token, b.password) : null, b.days ? now() + b.days * DAY : null, b.allow_download ? 1 : 0, b.public ? 1 : 0, now()).run();
   return json({ token });
 });
 on('PATCH', '/api/shares/:token', async (req, env, b, { token }, url, ctx, u) => {
   if (!(await ownShare(env, u, token))) return fail('Not found', 404);
   if ('revoked' in b) await env.DB.prepare('UPDATE shares SET revoked = ? WHERE token = ?').bind(b.revoked ? 1 : 0, token).run();
   if ('allow_download' in b) await env.DB.prepare('UPDATE shares SET allow_download = ? WHERE token = ?').bind(b.allow_download ? 1 : 0, token).run();
+  if ('public' in b) await env.DB.prepare('UPDATE shares SET public = ? WHERE token = ?').bind(b.public ? 1 : 0, token).run();
   return json({ ok: true });
 });
 on('GET', '/api/shares/:token/listens', async (req, env, b, { token }, url, ctx, u) => {
   if (!(await ownShare(env, u, token))) return fail('Not found', 404);
   return json((await env.DB.prepare('SELECT l.listener_name, l.at, l.seconds, l.duration, l.track_id, t.name AS track FROM listens l LEFT JOIN tracks t ON t.id = l.track_id WHERE share_token = ? ORDER BY at DESC LIMIT 1000').bind(token).all()).results);
+});
+
+// People added to a project by username: viewers can listen; editors can also add, remove, reorder and edit tracks.
+on('GET', '/api/projects/:id/members', async (req, env, b, { id }, url, ctx, u) => {
+  if (!(await ownProject(env, u, id))) return fail('Not found', 404);
+  return json((await env.DB.prepare('SELECT x.id, x.username, x.avatar, m.role FROM project_members m JOIN users x ON x.id = m.user_id WHERE m.project_id = ? ORDER BY m.created_at').bind(id).all()).results);
+});
+on('POST', '/api/projects/:id/members', async (req, env, b, { id }, url, ctx, u) => {
+  const p = await ownProject(env, u, id);
+  if (!p) return fail('Not found', 404);
+  const role = b.role === 'editor' ? 'editor' : 'viewer';
+  const who = await env.DB.prepare('SELECT id, username FROM users WHERE username = ? AND (disabled IS NULL OR disabled = 0)').bind(String(b.username || '').trim().toLowerCase()).first();
+  if (!who) return fail("There's no [vault] account with that username.", 404);
+  if (who.id === u.id) return fail("That's you.");
+  const had = await env.DB.prepare('SELECT 1 FROM project_members WHERE project_id = ? AND user_id = ?').bind(id, who.id).first();
+  await env.DB.prepare('INSERT INTO project_members (project_id, user_id, role, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(project_id, user_id) DO UPDATE SET role = excluded.role').bind(id, who.id, role, now()).run();
+  if (!had) notify(ctx, env, who.id, { title: `${u.username} shared “${p.name}” with you`, body: role === 'editor' ? 'You can listen and edit it.' : 'You can listen to it.', tag: 'member-' + id, url: '/' }, url.origin);
+  return json({ ok: true });
+});
+on('DELETE', '/api/projects/:id/members/:uid', async (req, env, b, { id, uid: who }, url, ctx, u) => {
+  if (who !== u.id && !(await ownProject(env, u, id))) return fail('Not found', 404); // the owner removes anyone; people can remove themselves
+  await env.DB.prepare('DELETE FROM project_members WHERE project_id = ? AND user_id = ?').bind(id, who).run();
+  return json({ ok: true });
+});
+// Remove a shared project (or a single saved track) from my library: leaves it and forgets saved links to it.
+on('POST', '/api/shared/leave', async (req, env, b, p, url, ctx, u) => {
+  const kind = b.track_id ? 'track' : 'project', target = b.track_id || b.project_id;
+  await env.DB.batch([
+    env.DB.prepare('DELETE FROM project_members WHERE project_id = ? AND user_id = ?').bind(target, u.id),
+    env.DB.prepare('DELETE FROM saved_shares WHERE user_id = ? AND token IN (SELECT token FROM shares WHERE kind = ? AND target_id = ?)').bind(u.id, kind, target),
+  ]);
+  return json({ ok: true });
 });
 
 // Editor presets (synced across your devices)
@@ -701,6 +778,13 @@ on('DELETE', '/api/admin/invites/:code', async (req, env, b, { code }, url, ctx,
   await env.DB.prepare('DELETE FROM invites WHERE code = ?').bind(code).run(); // a used code can go too: the account stays
   return json({ ok: true });
 });
+on('GET', '/api/admin/requests', async (req, env, b, p, url, ctx, u) =>
+  adminOnly(u) || json((await env.DB.prepare('SELECT id, name, contact, message, created_at FROM access_requests ORDER BY created_at DESC LIMIT 100').all()).results));
+on('DELETE', '/api/admin/requests/:id', async (req, env, b, { id }, url, ctx, u) => {
+  if (adminOnly(u)) return adminOnly(u);
+  await env.DB.prepare('DELETE FROM access_requests WHERE id = ?').bind(Number(id) || 0).run();
+  return json({ ok: true });
+});
 on('GET', '/api/admin/users', async (req, env, b, p, url, ctx, u) => {
   if (adminOnly(u)) return adminOnly(u);
   const { results } = await env.DB.prepare(`SELECT x.id, x.username, x.avatar, x.is_admin, x.storage, x.disabled, x.created_at, x.drive_refresh IS NOT NULL AS drive,
@@ -728,6 +812,7 @@ async function deleteAccount(env, id) {
     env.DB.prepare('DELETE FROM push_subs WHERE owner_id = ?').bind(id),
     env.DB.prepare('DELETE FROM saved_shares WHERE user_id = ?').bind(id),
     env.DB.prepare('DELETE FROM invites WHERE used_by = ?').bind(id),
+    env.DB.prepare('DELETE FROM project_members WHERE user_id = ?').bind(id),
     env.DB.prepare('DELETE FROM users WHERE id = ?').bind(id),
   ]);
   return { ok: true };
@@ -934,7 +1019,7 @@ async function handleShare(req, env, url, ctx) {
     const tracks = (await shareTracks(env, s)).map(({ file_key, ...t }) => ({ ...t, ext: drive.isDriveKey(file_key) ? 'mp3' : ext(file_key) }));
     const viewer = await userFromCookie(req, env);
     const saved = viewer && await env.DB.prepare('SELECT 1 FROM saved_shares WHERE user_id = ? AND token = ?').bind(viewer.id, token).first();
-    return json({ ...title, allow_download: !!s.allow_download, tracks, preview: PREVIEW_SECS,
+    return json({ ...title, allow_download: !!s.allow_download, public: !!s.public, tracks, preview: PREVIEW_SECS,
       viewer: viewer ? { username: viewer.username, avatar: viewer.avatar || null, mine: viewer.id === s.owner_id, saved: !!saved } : null }, 200, headers);
   }
   if (!(await shareAllowed(req, env, s))) return fail('Password needed', 401);
@@ -942,6 +1027,18 @@ async function handleShare(req, env, url, ctx) {
   const owner = () => getUser(env, s.owner_id);
   const viewer = await userFromCookie(req, env); // signed in to [vault]? (full songs, downloads, saving)
 
+  if (action === 'request' && req.method === 'POST') {
+    const lockKey = 'request:' + clientIp(req), wait = await lockedFor(env, lockKey);
+    if (wait) return fail(lockMessage(wait), 429);
+    const b = await req.json().catch(() => ({}));
+    const name = String(b.name || '').trim().slice(0, 80);
+    if (!name) return fail('Add your name');
+    await recordFail(env, lockKey); // a few per address, then a wait
+    await env.DB.prepare('INSERT INTO access_requests (share_token, name, contact, message, created_at) VALUES (?, ?, ?, ?, ?)')
+      .bind(token, name, String(b.contact || '').trim().slice(0, 200), String(b.message || '').trim().slice(0, 500), now()).run();
+    notify(ctx, env, OWNER, { title: `${name} wants an invite to [vault]`, body: String(b.message || b.contact || 'From a share link').slice(0, 200), tag: 'request', url: '/' }, url.origin);
+    return json({ ok: true });
+  }
   if (action === 'save') {
     if (!viewer) return fail('Sign in to save this', 401);
     if (req.method === 'DELETE') await env.DB.prepare('DELETE FROM saved_shares WHERE user_id = ? AND token = ?').bind(viewer.id, token).run();
@@ -954,10 +1051,10 @@ async function handleShare(req, env, url, ctx) {
     if (!t) return fail('Not found', 404);
     if (action === 'download') {
       if (!s.allow_download) return fail('Downloads are turned off for this link', 403);
-      if (!viewer) return fail('Sign in to download', 401);
+      if (!viewer && !s.public) return fail('Sign in to download', 401);
       return json({ url: `/s/${token}/audio/${t.id}`, filename: `${t.name}.${drive.isDriveKey(t.file_key) ? 'mp3' : ext(t.file_key)}` });
     }
-    return viewer ? streamFile(env, req, t.file_key, await owner(), 'private') : previewFile(env, req, t, await owner());
+    return viewer || s.public ? streamFile(env, req, t.file_key, await owner(), 'private') : previewFile(env, req, t, await owner());
   }
   if (action === 'cover') {
     const key = url.searchParams.get('k');
@@ -986,8 +1083,8 @@ async function handleShare(req, env, url, ctx) {
   if (action === 'comment' && req.method === 'POST') {
     const b = await req.json().catch(() => ({}));
     const t = tracks.find(t => t.id === b.track_id);
-    if (!viewer) return fail('Sign in to comment', 401);
-    const body = String(b.body || '').trim().slice(0, 1000), who = viewer.username;
+    if (!viewer && !s.public) return fail('Sign in to comment', 401);
+    const body = String(b.body || '').trim().slice(0, 1000), who = viewer ? viewer.username : String(b.name || '').trim().slice(0, 80) || 'Anonymous';
     if (!t) return fail('Not found', 404);
     if (!body) return fail('Write something first');
     // ponytail: flood guard per link (30 per 10 min); add per-address limits if a link gets abused
@@ -995,9 +1092,13 @@ async function handleShare(req, env, url, ctx) {
     if (n >= 30) return fail('Too many comments right now. Try again in a few minutes.', 429);
     const at = b.at == null || !isFinite(b.at) ? null : Math.max(0, Number(b.at));
     const c = { id: uid(), name: who, at, body, created_at: now() };
-    await env.DB.prepare('INSERT INTO comments (id, share_token, track_id, name, at, body, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .bind(c.id, token, t.id, who, at, body, c.created_at).run();
-    notify(ctx, env, s.owner_id, { title: `${who} commented${at == null ? '' : ' at ' + fmtAt(at)}`, body: `${t.name}: ${body}`.slice(0, 300), tag: 'comment-' + c.id, url: '/?track=' + t.id }, url.origin);
+    await env.DB.prepare('INSERT INTO comments (id, share_token, track_id, name, at, body, user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind(c.id, token, t.id, who, at, body, viewer?.id || null, c.created_at).run();
+    // Tell the owner, and everyone else who has commented on this track, so it becomes a conversation.
+    const msg = { title: `${who} commented${at == null ? '' : ' at ' + fmtAt(at)}`, body: `${t.name}: ${body}`.slice(0, 300), tag: 'comment-' + c.id };
+    const { results: others } = await env.DB.prepare('SELECT DISTINCT user_id FROM comments WHERE track_id = ? AND user_id IS NOT NULL').bind(t.id).all();
+    for (const id of new Set([s.owner_id, ...others.map(r => r.user_id)]))
+      if (id !== viewer?.id) notify(ctx, env, id, { ...msg, url: id === s.owner_id ? '/?track=' + t.id : `/s/${token}` }, url.origin);
     return json(c);
   }
   // how far into the track they got (sent while playing and when they leave)

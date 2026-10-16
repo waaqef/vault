@@ -41,6 +41,7 @@ audio{position:fixed;left:0;right:0;margin:0 auto;bottom:calc(16px + env(safe-ar
 .clist{display:grid;gap:2px;margin-top:8px;max-height:30vh;overflow-y:auto}
 .cm{animation:rise .3s var(--ease) both;display:grid;grid-template-columns:auto 1fr;gap:10px;align-items:baseline;padding:6px 2px;font-size:13px;color:var(--fg2)}.cm b{color:var(--fg);font-weight:600}
 .ts{height:auto;padding:2px 9px;border-radius:999px;background:rgba(255,210,63,.16);color:#ffdf7a;font:11px "Plex Mono",ui-monospace,monospace}
+.req{display:grid;gap:8px;max-width:none;margin:4px 0 0;text-align:left}.linkish{background:none;color:var(--fg2);height:auto;padding:4px 0;font-weight:400;text-decoration:underline;text-underline-offset:3px;justify-self:start}
 .gate{display:grid;gap:10px;margin:0 -12px 18px;padding:16px;border-radius:16px;background:rgba(255,255,255,.05);box-shadow:inset 0 0 0 1px rgba(255,255,255,.08);transition:box-shadow .3s,background .3s}
 .gate p{margin:0;color:var(--fg2)}.gate .acts{display:flex;gap:8px;flex-wrap:wrap}.gate a{display:inline-grid;place-items:center;height:38px;padding:0 18px;border-radius:999px;font-weight:500;text-decoration:none;background:#fff;color:var(--bg)}
 .gate a.alt{background:rgba(255,255,255,.08);color:var(--fg)}.gate.ping{background:rgba(255,255,255,.1);box-shadow:inset 0 0 0 1px rgba(255,255,255,.4)}
@@ -71,12 +72,31 @@ function ask(err) {
 }
 function show(d) {
   // Signed in to [vault]: full songs, comments, downloads and saving. Otherwise: short previews and a sign-in card.
-  const full = !!d.viewer, next = encodeURIComponent(location.pathname);
+  const full = !!d.viewer || d.public, next = encodeURIComponent(location.pathname); // public links: full songs for everyone
   a.controls = full; // a preview's player bar would show the cut-down length
   const gate = full ? null : el('div', { className: 'gate' },
     el('div', { className: 'mono', textContent: '[preview]' }),
     el('p', { textContent: 'You\u2019re hearing ' + d.preview + '-second previews. Sign in to [vault] to hear the full songs, comment' + (d.allow_download ? ', download' : '') + ' and save this to your library.' }),
-    el('div', { className: 'acts' }, el('a', { href: '/?next=' + next, textContent: 'Sign in' }), el('a', { className: 'alt', href: '/?signup=1&next=' + next, textContent: 'Sign up with an invite code' })));
+    el('div', { className: 'acts' }, el('a', { href: '/?next=' + next, textContent: 'Sign in' }), el('a', { className: 'alt', href: '/?signup=1&next=' + next, textContent: 'Sign up with an invite code' })),
+    askInvite());
+  // No invite code? Send the admin a request (name, how to reach you, a note).
+  function askInvite() {
+    const nm = el('input', { placeholder: 'Your name', maxLength: 80, required: true, value: name }), ct = el('input', { placeholder: 'How to reach you (Instagram, email…)', maxLength: 200 });
+    const note = el('input', { placeholder: 'A note (optional)', maxLength: 500 }), msg = el('div', { className: 'mono' });
+    const f = el('form', { className: 'req', hidden: true }, nm, ct, note, el('button', { textContent: 'Ask for an invite' }), msg);
+    f.onsubmit = async e => {
+      e.preventDefault(); f.querySelector('button').disabled = true;
+      try {
+        const r = await fetch(base + '/request', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: nm.value, contact: ct.value, message: note.value }) });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || 'That didn’t send');
+        f.replaceChildren(el('p', { textContent: 'Sent. You’ll hear back if you get an invite.' }));
+      } catch (x) { msg.textContent = x.message; f.querySelector('button').disabled = false; }
+    };
+    const open = el('button', { className: 'linkish', type: 'button', textContent: 'No invite code? Ask for one' });
+    open.onclick = () => { open.remove(); f.hidden = false; nm.focus(); };
+    return el('div', {}, open, f);
+  }
   const nudge = () => { gate.classList.add('ping'); gate.scrollIntoView({ behavior: 'smooth', block: 'center' }); setTimeout(() => gate.classList.remove('ping'), 900); };
   const ck = d.cover || d.tracks.find(t => t.cover)?.cover;
   const cover = el('div', { className: 'cover' + (ck ? '' : ' disc') });
@@ -133,7 +153,9 @@ function show(d) {
   const input = el('input', { placeholder: 'Comment…', maxLength: 1000 });
   input.setAttribute('aria-label', 'Comment');
   const post = el('button', { textContent: 'Post', type: 'submit' });
-  const form = el('form', { className: 'cform' }, input, post);
+  const who = d.viewer ? null : el('input', { placeholder: 'Your name', maxLength: 80, value: name, style: 'flex:0 0 120px' });
+  if (who) who.setAttribute('aria-label', 'Your name');
+  const form = el('form', { className: 'cform' }, who || '', input, post);
   const list = el('div', { className: 'clist' });
   const now = el('section', { className: 'now', hidden: true }, nowName, cv, el('div', { className: 'times' }, tNow, tEnd), full ? form : '', list);
   let comments = [], pk = null, frame = 0, atMark = null;
@@ -187,6 +209,7 @@ function show(d) {
     post.disabled = true;
     try {
       const at = atMark ?? (a.currentTime || 0);
+      if (who) { name = who.value.trim() || 'Anonymous'; try { localStorage.setItem('listener', name); } catch {} }
       const r = await fetch(base + '/comment', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ track_id: d.tracks[cur].id, name, at, body }) });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || 'Couldn’t post that');
@@ -234,7 +257,7 @@ function show(d) {
   addEventListener('pagehide', () => progress(true));
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') progress(true); });
   let saveBtn = '';
-  if (full && !d.viewer.mine) {
+  if (d.viewer && !d.viewer.mine) {
     saveBtn = el('button', { className: 'save' });
     const paint = () => { saveBtn.classList.toggle('on', d.viewer.saved); saveBtn.textContent = d.viewer.saved ? '\u2713 In your library' : '+ Save to my library'; };
     saveBtn.onclick = async () => {

@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS track_versions (
 CREATE TABLE IF NOT EXISTS shares (
   token TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('project', 'track')),
   target_id TEXT NOT NULL, password_hash TEXT, expires_at INTEGER,
-  revoked INTEGER NOT NULL DEFAULT 0, allow_download INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL
+  revoked INTEGER NOT NULL DEFAULT 0, allow_download INTEGER NOT NULL DEFAULT 0, public INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS listens (
   id INTEGER PRIMARY KEY AUTOINCREMENT, share_token TEXT NOT NULL,
@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS login_attempts (key TEXT PRIMARY KEY, count INTEGER N
 CREATE TABLE IF NOT EXISTS push_subs (endpoint TEXT PRIMARY KEY, p256dh TEXT NOT NULL, auth TEXT NOT NULL, owner_id TEXT NOT NULL DEFAULT 'owner', created_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS comments (
   id TEXT PRIMARY KEY, share_token TEXT NOT NULL, track_id TEXT NOT NULL,
-  name TEXT NOT NULL, at REAL, body TEXT NOT NULL, created_at INTEGER NOT NULL
+  name TEXT NOT NULL, at REAL, body TEXT NOT NULL, user_id TEXT, created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS comments_track ON comments (track_id, created_at);
 CREATE INDEX IF NOT EXISTS tracks_deleted ON tracks (deleted_at);
@@ -53,3 +53,6 @@ CREATE INDEX IF NOT EXISTS projects_owner ON projects (owner_id);
 CREATE INDEX IF NOT EXISTS folders_owner ON folders (owner_id);
 CREATE INDEX IF NOT EXISTS versions_key ON track_versions (file_key);
 CREATE TABLE IF NOT EXISTS saved_shares (user_id TEXT NOT NULL, token TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (user_id, token));
+CREATE TABLE IF NOT EXISTS project_members (project_id TEXT NOT NULL, user_id TEXT NOT NULL, role TEXT NOT NULL CHECK (role IN ('viewer', 'editor')), created_at INTEGER NOT NULL, PRIMARY KEY (project_id, user_id));
+CREATE INDEX IF NOT EXISTS members_user ON project_members (user_id);
+CREATE TABLE IF NOT EXISTS access_requests (id INTEGER PRIMARY KEY AUTOINCREMENT, share_token TEXT, name TEXT NOT NULL, contact TEXT, message TEXT, created_at INTEGER NOT NULL);

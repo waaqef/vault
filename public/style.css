@@ -1269,3 +1269,11 @@ a.btn { text-decoration: none; }
 .first-cover.has > * { display: none; }
 a.nav { text-decoration: none; color: inherit; }
 .set-row.used code { text-decoration: line-through; opacity: .5; }
+.people-add { display: flex; gap: 8px; margin: 6px 0 8px; }
+.people-add input { flex: 1; min-width: 0; }
+.hero .art.locked { cursor: default; }
+/* share links: the date on its own line, the switches wrap underneath */
+.share-links { grid-auto-rows: max-content; align-content: start; }
+.share-links .item { flex-wrap: wrap; row-gap: 6px; flex-shrink: 0; }
+.share-links .item .grow { flex: 1 0 100%; }
+label small.people-note, .people-note { display: block; color: var(--fg-3); font-size: 12px; font-weight: 400; line-height: 1.45; margin-top: 4px; }
