@@ -132,7 +132,14 @@ export async function openEditor(track, app) {
     analyser.disconnect();
     analyser.connect(background ? bgDest : actx.destination);
   };
-  const onVis = () => route(document.visibilityState === 'hidden' && playing);
+  // Back on screen: sound goes straight out again, and playback restarts cleanly from where it is. While the app was
+  // away the phone may have paused the audio engine; carrying on from that half-stalled state glitches badly
+  // (especially with pitch/tempo on), so it resumes the engine first and then starts afresh at the same spot.
+  const onVis = () => {
+    if (document.visibilityState === 'hidden') return route(playing);
+    route(false);
+    if (playing) { const at = pos(); actx.resume().then(() => { if (playing) play(at); }); }
+  };
   document.addEventListener('visibilitychange', onVis);
   if ('mediaSession' in navigator) {
     navigator.mediaSession.metadata = new MediaMetadata({ title: track.name, artist: [track.artist, project].filter(Boolean).join(' · ') || '[vault]', album: 'Editing' });
