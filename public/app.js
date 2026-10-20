@@ -514,8 +514,21 @@ function renderHome(toolbar) {
     h('div', { className: 'shelf-h' }, h('h2', {}, title), more && h('button', { className: 'btn ghost', onclick: more }, 'See all')),
     h('div', { className: 'shelf-row' }, list.map((t, i) => trackCard(t, list, i))));
   const newest = [...S.tracks].sort((x, y) => y.created_at - x.created_at);
-  const recent = store.get('recent', []).map(trackOf).filter(Boolean).slice(0, 12);
   const starred = newest.filter(t => t.mark === 'star').slice(0, 12);
+  // Jump back in: the projects you've played from most recently (your own and shared ones)
+  const played = [...new Set(store.get('recent', []).map(id => trackOf(id)?.project_id).filter(Boolean))].map(projectOf).filter(Boolean).slice(0, 12);
+  const tracksIn = id => [...S.tracks, ...S.sharedTracks].filter(t => t.project_id === id).sort((x, y) => x.position - y.position);
+  const projectShelf = (title, list, more) => list.length > 0 && h('section', { className: 'shelf' },
+    h('div', { className: 'shelf-h' }, h('h2', {}, title), more && h('button', { className: 'btn ghost', onclick: more }, 'See all')),
+    h('div', { className: 'shelf-row projects-row' }, list.map(p => {
+      const tl = tracksIn(p.id);
+      return h('div', { className: 'card', role: 'button', tabIndex: 0, style: { '--i': Math.min(n++, 14) }, onclick: () => setView({ type: 'project', id: p.id }),
+        onkeydown(e) { if (e.key === 'Enter') setView({ type: 'project', id: p.id }); } },
+        h('span', { className: 'card-art' + (p.cover ? '' : ' disc'), style: bg(p.cover) },
+          tl.length > 0 && h('button', { className: 'card-play', 'aria-label': `Play ${p.name}`, onclick(e) { e.stopPropagation(); playList(tl, 0, { shuffle: false }); } }, icon('play', 16))),
+        h('span', { className: 'card-t' }, p.name),
+        h('span', { className: 'card-s mono' }, p.owner ? `by ${p.owner}` : `${tl.length} ${tl.length === 1 ? 'track' : 'tracks'}`));
+    })));
   const hour = new Date().getHours();
   const hello = hour < 5 ? 'up late' : hour < 12 ? 'good morning' : hour < 18 ? 'good afternoon' : 'good evening';
   const topFolders = S.folders.filter(f => !f.parent_id);
@@ -539,18 +552,22 @@ function renderHome(toolbar) {
         h('div', { className: 'gs-step' },
           h('span', { className: 'gs-n mono' }, '3'), h('b', {}, 'Share it'), h('span', {}, 'Open a project and tap Share to send a link or add people.')))),
     // projects: one row of the most recent (two on phones), the full grid with folder filters behind "See all"
-    S.projects.length > 0 && h('section', { className: 'shelf' },
-      h('div', { className: 'shelf-h' }, h('h2', {}, S.homeAll ? 'All projects' : 'Recent projects'),
-        h('span', { className: 'shelf-acts' },
-          h('button', { className: 'btn ghost', onclick: () => newProject(S.homeFolder) }, icon('plus', 15), 'New'),
-          S.projects.length > 4 && h('button', { className: 'btn ghost', onclick: () => { S.homeAll = !S.homeAll; if (!S.homeAll) S.homeFolder = null; renderMain(); } },
-            S.homeAll ? 'Show less' : `See all ${S.projects.length}`))),
-      S.homeAll && chips,
-      projects.length ? h('div', { className: 'card-grid' + (S.homeAll ? '' : ' peek') }, (S.homeAll ? projects : projects.slice(0, 12)).map(card))
-        : h('div', { className: 'muted' }, 'No projects in this folder yet.')),
-    shelf('Jump back in', recent),
-    shelf('Starred', starred, () => setView({ type: 'starred' })),
-    !S.homeAll && shelf('Recently added', newest.slice(0, 12), () => setView({ type: 'all' })));
+    ...(S.homeAll ? ['projects'] : homeLayout()).map(k => ({
+      projects: () => S.projects.length > 0 && h('section', { className: 'shelf' },
+        h('div', { className: 'shelf-h' }, h('h2', {}, S.homeAll ? 'All projects' : 'Recent projects'),
+          h('span', { className: 'shelf-acts' },
+            h('button', { className: 'btn ghost', onclick: () => newProject(S.homeFolder) }, icon('plus', 15), 'New'),
+            S.projects.length > 4 && h('button', { className: 'btn ghost', onclick: () => { S.homeAll = !S.homeAll; if (!S.homeAll) S.homeFolder = null; renderMain(); } },
+              S.homeAll ? 'Show less' : `See all ${S.projects.length}`))),
+        S.homeAll && chips,
+        projects.length ? h('div', { className: 'card-grid' + (S.homeAll ? '' : ' peek') }, (S.homeAll ? projects : projects.slice(0, 12)).map(card))
+          : h('div', { className: 'muted' }, 'No projects in this folder yet.')),
+      jump: () => projectShelf('Jump back in', played),
+      shared: () => projectShelf('Shared with me', S.sharedProjects.slice(0, 12)),
+      starred: () => shelf('Starred', starred, () => setView({ type: 'starred' })),
+      added: () => shelf('Recently added', newest.slice(0, 12), () => setView({ type: 'all' })),
+    })[k]?.()),
+    !S.homeAll && (S.tracks.length > 0 || S.projects.length > 0) && h('div', { className: 'home-foot' }, h('button', { className: 'btn ghost', onclick: customizeHome }, icon('sliders', 15), 'Customize home')));
 
   const key = JSON.stringify(S.view) + S.homeFolder + S.homeAll;
   const fresh = key !== lastView; lastView = key;
@@ -558,6 +575,26 @@ function renderHome(toolbar) {
   main.classList.toggle('enter', fresh);
   if (fresh) main.scrollTop = 0;
   renderBulk();
+}
+
+// Home sections: which show, in what order. Kept on this device; songs are off by default to keep Home calm.
+const HOME_SECTIONS = { projects: 'Recent projects', jump: 'Jump back in', shared: 'Shared with me', starred: 'Starred songs', added: 'Recently added songs' };
+const homeLayout = () => store.get('homeLayout', ['projects', 'jump', 'shared']).filter(k => HOME_SECTIONS[k]);
+function customizeHome() {
+  let order = [...homeLayout(), ...Object.keys(HOME_SECTIONS).filter(k => !homeLayout().includes(k))];
+  const on = new Set(homeLayout());
+  const list = h('div', { className: 'list' });
+  const draw = () => fill(list, order.map((k, i) => h('div', { className: 'item' },
+    h('input', { type: 'checkbox', className: 'toggle', checked: on.has(k), 'aria-label': `Show ${HOME_SECTIONS[k]}`, onchange() { this.checked ? on.add(k) : on.delete(k); } }),
+    h('span', { className: 'grow' }, HOME_SECTIONS[k]),
+    h('button', { type: 'button', className: 'icon-btn sm', 'aria-label': `Move ${HOME_SECTIONS[k]} up`, disabled: i === 0, onclick: () => { [order[i - 1], order[i]] = [order[i], order[i - 1]]; draw(); } }, icon('up', 14)),
+    h('button', { type: 'button', className: 'icon-btn sm', 'aria-label': `Move ${HOME_SECTIONS[k]} down`, disabled: i === order.length - 1, onclick: () => { [order[i + 1], order[i]] = [order[i], order[i + 1]]; draw(); } }, icon('down', 14)))));
+  draw();
+  const d = dialog(h('div', { className: 'stack' }, h('h2', {}, 'Customize home'),
+    h('p', { className: 'muted', style: { margin: 0 } }, 'Choose what shows on Home and in what order. Saved on this device.'), list,
+    h('div', { className: 'btns' },
+      h('button', { className: 'btn ghost', onclick: () => { order = Object.keys(HOME_SECTIONS); on.clear(); ['projects', 'jump', 'shared'].forEach(k => on.add(k)); draw(); } }, 'Reset'),
+      h('button', { className: 'btn primary', onclick: () => { store.set('homeLayout', order.filter(k => on.has(k))); d.close(); renderMain(); } }, 'Save'))));
 }
 
 function renderList(animate = false) {
