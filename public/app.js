@@ -1742,7 +1742,8 @@ async function playAt(i, { remember = true } = {}) {
   if (my !== playToken) return; // something else was picked while this loaded
   audio.src = blob ? (blobUrl = URL.createObjectURL(blob)) : `/api/audio/${t.id}?k=${encodeURIComponent(t.file_key)}`; // file key in the URL so a saved edit isn't served from the cached redirect
   audio.loop = P.repeat === 'one';
-  audio.play().catch(() => {});
+  // The editor opened while this was downloading: load it but don't start, or it'd play on top of the editor.
+  if (editorOpen) audio.pause(); else audio.play().catch(() => {});
   renderPlayer(); markPlaying();
   if ('mediaSession' in navigator) {
     const t = cur, art = coverOf(t), meta = artwork => new MediaMetadata({ title: t.name, artist: t.artist || projectOf(t.project_id)?.name || '', artwork });
@@ -2079,17 +2080,19 @@ function queueDialog() {
 }
 
 // ---- editor ---------------------------------------------------------------------------------
+let editorOpen = false; // while it's open, the player never starts on its own
 async function openEditor(t) {
   if (!canEdit(t.project_id)) return toast('This project is listen-only for you', { quiet: true });
   if (!S.online) return toast('Editing needs a connection', { error: true });
   // The editor opens at the same spot the player was at (and keeps playing if it was), and hands it back on close.
   const same = cur?.id === t.id, startAt = same ? audio.currentTime : 0, autoplay = same && !audio.paused;
-  audio.pause();
+  audio.pause(); editorOpen = true;
   try {
     const { openEditor } = await import('./editor.js');
     await openEditor(t, { api, toast, oops, dialog, prompt, confirm, uploadFile: (f, cb) => uploadFile(f, cb, t.project_id), audioBlob, onSaved: load, h, project: projectOf(t.project_id)?.name,
       startAt, autoplay, haptic, onClosed: back => editorClosed(t, back) });
   } catch (e) {
+    editorOpen = false;
     // never fail silently: say what went wrong
     toast(`The editor couldn't open: ${e.message}. Try reloading the app.`, { error: true, ms: 8000 });
   }
@@ -2098,6 +2101,7 @@ async function openEditor(t) {
 // Back from the editor: the player continues from where the editor was, playing or paused,
 // on the new version if one was saved.
 async function editorClosed(t, { at, playing, saved }) {
+  editorOpen = false;
   if (saved) await load();
   const fresh = trackOf(t.id) || t;
   const seek = () => {
