@@ -1367,8 +1367,8 @@ button.gs-step:active { transform: scale(.98); }
 /* a light frost on the peeking covers: fine grain and a soft sheen, barely blurred, mostly solid, with a faint glow */
 .stack-layer { overflow: hidden; box-shadow: 0 6px 18px rgba(0,0,0,.5), 0 0 16px rgba(255,255,255,.07), inset 0 0 0 1px rgba(255,255,255,.16); }
 .stack-layer::after { content: ""; position: absolute; inset: 0; border-radius: inherit;
-  -webkit-backdrop-filter: blur(1px) saturate(125%); backdrop-filter: blur(1px) saturate(125%);
   background: var(--grain) 0 0 / 120px, linear-gradient(150deg, rgba(255,255,255,.16), rgba(255,255,255,0) 50%, rgba(255,255,255,.06)); }
+/* (no backdrop-filter here: the tile lifts on hover, and a lifted parent makes it paint over the cover) */
 .back-btn svg { transform: rotate(180deg); }
 .all-title { margin: 4px 0 12px; font-size: 26px; letter-spacing: -0.04em; font-weight: 600; }
 /* depth of field: the covers behind the middle one are slightly out of focus */
