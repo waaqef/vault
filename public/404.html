@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>[vault] Not found</title>
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#191919">
+<link rel="icon" href="/icon.svg">
+<link rel="stylesheet" href="/page.css">
+<style>
+  main { display: grid; place-items: center; min-height: 70vh; }
+  article { text-align: center; max-width: 440px; }
+  .code { font-family: var(--mono); font-size: 72px; line-height: 1; color: var(--fg); letter-spacing: -0.04em; margin: 6px 0 10px; }
+  .disc { width: 84px; height: 84px; margin: 0 auto 18px; border-radius: 50%; animation: spin 14s linear infinite;
+    background: radial-gradient(circle, #191919 0 13%, rgba(255,255,255,.35) 13.5% 15%, transparent 15.5%),
+      conic-gradient(from 30deg, #2a2a2a, #6d6d6d 12%, #2e2e2e 25%, #8a8a8a 38%, #2b2b2b 52%, #5e5e5e 66%, #262626 80%, #7a7a7a 92%, #2a2a2a); }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .disc { animation: none; } }
+  .acts { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: 22px; }
+  .acts a { display: inline-flex; align-items: center; height: 40px; padding: 0 20px; border-radius: 999px; font-weight: 600; font-size: 14px; text-decoration: none; }
+  .acts .primary { color: #111; background: linear-gradient(180deg, #fff, #d9d9d9); box-shadow: inset 0 1px 0 #fff, 0 8px 24px rgba(0,0,0,.35); }
+  .acts .ghost { color: var(--fg); background: rgba(255,255,255,.07); box-shadow: inset 0 1px 0 rgba(255,255,255,.12); }
+</style>
+</head><body>
+<nav class="glass" aria-label="Main"><a class="brand" href="/">[vault]</a><a class="lnk" href="/privacy">[privacy]</a><a class="lnk" href="/terms">[terms]</a><a class="btn" href="/login">Sign in</a></nav>
+<main><article class="glass">
+<div class="disc" aria-hidden="true"></div>
+<span class="label">[not found]</span>
+<div class="code">404</div>
+<p>This page doesn't exist, or it moved. If someone sent you a share link, it may have been turned off.</p>
+<div class="acts"><a class="primary" href="/library">Go to your library</a><a class="ghost" href="/">Home page</a></div>
+</article></main>
+</body></html>

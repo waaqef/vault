@@ -381,18 +381,8 @@ const filterCount = () => Object.values(S.filter).filter(Boolean).length;
 // the default pastel palette. Colours are picked once per cover from a 32px copy: the strongest hues, by saturation.
 const tintCache = new Map();
 let tintKey = null;
-function tintFrom(key) {
-  if (key === tintKey) return;
-  tintKey = key;
-  const holo = $('#holo i');
-  const apply = colors => {
-    if (tintKey !== key || !holo) return;
-    document.documentElement.classList.toggle('cover-tint', !!colors);
-    if (!colors) return holo.style.removeProperty('--holo');
-    const spots = [['42% 38% at 12% 18%', .1], ['46% 40% at 88% 12%', .1], ['50% 46% at 72% 88%', .085], ['42% 42% at 18% 86%', .09], ['36% 30% at 50% 50%', .045]];
-    holo.style.setProperty('--holo', spots.map(([at, a], i) => `radial-gradient(${at}, rgba(${colors[i % colors.length]},${a}), transparent 70%)`).join(', '));
-  };
-  if (!key) return apply(null);
+// A cover's strongest colours (up to 4, as 'r,g,b'), or null for black-and-white covers. Cached per cover.
+function coverPalette(key) {
   if (!tintCache.has(key)) tintCache.set(key, (async () => {
     const img = await loadImg(await (await fetch(coverUrl(key))).blob());
     const c = h('canvas', { width: 32, height: 32 }), g = c.getContext('2d', { willReadFrequently: true });
@@ -408,8 +398,23 @@ function tintFrom(key) {
     const top = bins.filter(x => x.w > 0.5).sort((x, y) => y.w - x.w).slice(0, 4).map(x => [x.r, x.g, x.b].map(v => Math.round(v / x.w)).join(','));
     return top.length ? top : null; // a black-and-white cover keeps the default palette
   })().catch(() => null));
-  tintCache.get(key).then(apply);
+  return tintCache.get(key);
 }
+function tintFrom(key) {
+  if (key === tintKey) return;
+  tintKey = key;
+  const holo = $('#holo i');
+  const apply = colors => {
+    if (tintKey !== key || !holo) return;
+    document.documentElement.classList.toggle('cover-tint', !!colors);
+    if (!colors) return holo.style.removeProperty('--holo');
+    const spots = [['42% 38% at 12% 18%', .1], ['46% 40% at 88% 12%', .1], ['50% 46% at 72% 88%', .085], ['42% 42% at 18% 86%', .09], ['36% 30% at 50% 50%', .045]];
+    holo.style.setProperty('--holo', spots.map(([at, a], i) => `radial-gradient(${at}, rgba(${colors[i % colors.length]},${a}), transparent 70%)`).join(', '));
+  };
+  if (!key) return apply(null);
+  coverPalette(key).then(apply);
+}
+
 
 function renderMain() {
   tintFrom(S.view.type === 'project' ? projectOf(S.view.id)?.cover || null : null);
@@ -494,6 +499,12 @@ const homeCols = () => (phone.matches ? 4 : Math.max(2, Math.floor(($('#main').c
 let lastHomeCols = 0;
 addEventListener('resize', () => { if (S.view.type === 'home' && !S.homeAll && homeCols() !== lastHomeCols) renderMain(); });
 
+// Project tiles glow in their cover's own colours on hover (white-ish for covers without colour).
+function glowFrom(el, key) {
+  if (key) coverPalette(key).then(c => { if (c) c.slice(0, 3).forEach((rgb, i) => el.style.setProperty(`--g${i + 1}`, `rgb(${rgb})`)); });
+  return el;
+}
+
 function renderHome(toolbar) {
   const main = $('#main');
   const under = (folderId, fid) => { for (let x = folderId; x; x = S.folders.find(f => f.id === x)?.parent_id) if (x === fid) return true; return false; };
@@ -504,12 +515,12 @@ function renderHome(toolbar) {
   let n = 0; // stagger index
   const card = p => {
     const list = tracksOf(p.id);
-    return h('div', { className: 'card', role: 'button', tabIndex: 0, style: { '--i': Math.min(n++, 14) }, onclick: () => setView({ type: 'project', id: p.id }),
+    return glowFrom(h('div', { className: 'card', role: 'button', tabIndex: 0, style: { '--i': Math.min(n++, 14) }, onclick: () => setView({ type: 'project', id: p.id }),
       onkeydown(e) { if (e.key === 'Enter') setView({ type: 'project', id: p.id }); } },
       h('span', { className: 'card-art' + (p.cover ? '' : ' disc'), style: bg(p.cover) },
         list.length > 0 && h('button', { className: 'card-play', 'aria-label': `Play ${p.name}`, onclick(e) { e.stopPropagation(); playList(list, 0, { shuffle: false }); } }, icon('play', 16))),
       h('span', { className: 'card-t' }, p.name),
-      h('span', { className: 'card-s mono' }, `${list.length} ${list.length === 1 ? 'track' : 'tracks'}`));
+      h('span', { className: 'card-s mono' }, `${list.length} ${list.length === 1 ? 'track' : 'tracks'}`)), p.cover);
   };
   // One row of recent projects; if there are more, the last tile is a stack of the next covers that opens them all.
   const recentRow = list => {
@@ -537,12 +548,12 @@ function renderHome(toolbar) {
     h('div', { className: 'shelf-h' }, h('h2', {}, title), more && h('button', { className: 'btn ghost', onclick: more }, 'See all')),
     h('div', { className: 'shelf-row projects-row' }, list.map(p => {
       const tl = tracksIn(p.id);
-      return h('div', { className: 'card', role: 'button', tabIndex: 0, style: { '--i': Math.min(n++, 14) }, onclick: () => setView({ type: 'project', id: p.id }),
+      return glowFrom(h('div', { className: 'card', role: 'button', tabIndex: 0, style: { '--i': Math.min(n++, 14) }, onclick: () => setView({ type: 'project', id: p.id }),
         onkeydown(e) { if (e.key === 'Enter') setView({ type: 'project', id: p.id }); } },
         h('span', { className: 'card-art' + (p.cover ? '' : ' disc'), style: bg(p.cover) },
           tl.length > 0 && h('button', { className: 'card-play', 'aria-label': `Play ${p.name}`, onclick(e) { e.stopPropagation(); playList(tl, 0, { shuffle: false }); } }, icon('play', 16))),
         h('span', { className: 'card-t' }, p.name),
-        h('span', { className: 'card-s mono' }, p.owner ? `by ${p.owner}` : `${tl.length} ${tl.length === 1 ? 'track' : 'tracks'}`));
+        h('span', { className: 'card-s mono' }, p.owner ? `by ${p.owner}` : `${tl.length} ${tl.length === 1 ? 'track' : 'tracks'}`)), p.cover);
     })));
   const hour = new Date().getHours();
   const hello = hour < 5 ? 'up late' : hour < 12 ? 'good morning' : hour < 18 ? 'good afternoon' : 'good evening';

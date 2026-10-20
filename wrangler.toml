@@ -5,6 +5,7 @@ compatibility_date = "2025-09-01"
 [assets]
 directory = "./public"
 binding = "ASSETS"
+not_found_handling = "404-page"
 run_worker_first = ["/api/*", "/s/*", "/google6e583667ce62f72e.html", "/sw.js", "/", "/login", "/library", "/about"]
 
 # This deploy's id: stamped into the service worker so every deploy refreshes the app's offline copy.
@@ -27,6 +28,7 @@ B2_BUCKET = "untitled-vault"
 [env.local.assets]
 directory = "./public"
 binding = "ASSETS"
+not_found_handling = "404-page"
 run_worker_first = ["/api/*", "/s/*", "/blob/*", "/sw.js", "/", "/login", "/library", "/about"]
 
 [[env.local.d1_databases]]
