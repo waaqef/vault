@@ -489,6 +489,11 @@ function renderMain() {
 let lastView = null;
 
 // ---- home: a gallery of what's in the vault ----------------------------------------------------
+// How many project tiles fit in one row of Home (matches .card-grid: 168px minimum, 18px gaps; two rows of 2 on phones).
+const homeCols = () => (phone.matches ? 4 : Math.max(2, Math.floor(($('#main').clientWidth - 72 + 18) / (168 + 18))));
+let lastHomeCols = 0;
+addEventListener('resize', () => { if (S.view.type === 'home' && !S.homeAll && homeCols() !== lastHomeCols) renderMain(); });
+
 function renderHome(toolbar) {
   const main = $('#main');
   const under = (folderId, fid) => { for (let x = folderId; x; x = S.folders.find(f => f.id === x)?.parent_id) if (x === fid) return true; return false; };
@@ -505,6 +510,16 @@ function renderHome(toolbar) {
         list.length > 0 && h('button', { className: 'card-play', 'aria-label': `Play ${p.name}`, onclick(e) { e.stopPropagation(); playList(list, 0, { shuffle: false }); } }, icon('play', 16))),
       h('span', { className: 'card-t' }, p.name),
       h('span', { className: 'card-s mono' }, `${list.length} ${list.length === 1 ? 'track' : 'tracks'}`));
+  };
+  // One row of recent projects; if there are more, the last tile is a stack of the next covers that opens them all.
+  const recentRow = list => {
+    const cols = homeCols(), more = list.length > cols, shown = list.slice(0, more ? cols - 1 : cols), rest = list.slice(shown.length);
+    const open = () => { S.homeAll = true; renderMain(); };
+    return h('div', { className: 'card-grid' }, shown.map(card), more && h('div', { className: 'card stack-card', role: 'button', tabIndex: 0, style: { '--i': Math.min(n++, 14) },
+      'aria-label': `All projects, ${list.length}`, onclick: open, onkeydown(e) { if (e.key === 'Enter') open(); } },
+      h('span', { className: 'stack-art' }, rest.slice(0, 3).reverse().map((p, i, a) => h('span', { className: 'stack-layer' + (p.cover ? '' : ' disc'), style: { ...bg(p.cover), '--k': a.length - 1 - i } }))),
+      h('span', { className: 'card-t' }, 'All projects'),
+      h('span', { className: 'card-s mono' }, `${list.length} projects`)));
   };
   const trackCard = (t, list, i) => h('button', { className: 'tcard', style: { '--i': Math.min(n++, 14) }, onclick: () => playList(list, i) },
     thumb(coverOf(t), 'tcard-art' + (t.mark === 'star' ? ' starred' : ''), h('span', { className: 'tcard-play' }, icon('play', 14))),
@@ -554,14 +569,14 @@ function renderHome(toolbar) {
       ? projectShelf(x.name, x.projects.map(projectOf).filter(Boolean))
       : ({
       projects: () => S.projects.length > 0 && h('section', { className: 'shelf' },
-        h('div', { className: 'shelf-h' }, h('h2', {}, S.homeAll ? 'All projects' : 'Recent projects'),
-          h('span', { className: 'shelf-acts' },
-            h('button', { className: 'btn ghost', onclick: () => newProject(S.homeFolder) }, icon('plus', 15), 'New'),
-            S.projects.length > 4 && h('button', { className: 'btn ghost', onclick: () => { S.homeAll = !S.homeAll; if (!S.homeAll) S.homeFolder = null; renderMain(); } },
-              S.homeAll ? 'Show less' : `See all ${S.projects.length}`))),
+        h('div', { className: 'shelf-h' },
+          S.homeAll ? h('button', { className: 'btn ghost back-btn', onclick: () => { S.homeAll = false; S.homeFolder = null; renderMain(); } }, icon('chevron', 15), 'Back')
+            : h('h2', {}, 'Recent projects'),
+          h('span', { className: 'shelf-acts' }, h('button', { className: 'btn ghost', onclick: () => newProject(S.homeFolder) }, icon('plus', 15), 'New'))),
+        S.homeAll && h('h2', { className: 'all-title' }, 'All projects'),
         S.homeAll && chips,
-        projects.length ? h('div', { className: 'card-grid' + (S.homeAll ? '' : ' peek') }, (S.homeAll ? projects : projects.slice(0, 12)).map(card))
-          : h('div', { className: 'muted' }, 'No projects in this folder yet.')),
+        S.homeAll ? (projects.length ? h('div', { className: 'card-grid' }, projects.map(card)) : h('div', { className: 'muted' }, 'No projects in this folder yet.'))
+          : recentRow(projects)),
       shared: () => projectShelf('Shared with me', S.sharedProjects.slice(0, 12)),
       starred: () => shelf('Starred', starred, () => setView({ type: 'starred' })),
       added: () => shelf('Recently added', newest.slice(0, 12), () => setView({ type: 'all' })),
@@ -569,6 +584,7 @@ function renderHome(toolbar) {
     !S.homeAll && (S.tracks.length > 0 || S.projects.length > 0) && h('div', { className: 'home-foot' }, h('button', { className: 'btn ghost', onclick: customizeHome }, icon('sliders', 15), 'Customize home')));
 
   const key = JSON.stringify(S.view) + S.homeFolder + S.homeAll;
+  lastHomeCols = homeCols();
   const fresh = key !== lastView; lastView = key;
   main.replaceChildren(toolbar, page);
   main.classList.toggle('enter', fresh);

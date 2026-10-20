@@ -1347,3 +1347,14 @@ button.gs-step:active { transform: scale(.98); }
 .item.pick { cursor: pointer; font-family: var(--sans); font-size: 14px; color: var(--fg); gap: 10px; }
 .item.pick input { width: 18px; height: 18px; accent-color: var(--fg); }
 .pick-n { min-width: 22px; height: 22px; border-radius: 11px; display: grid; place-items: center; background: var(--fg); color: var(--bg); font-size: 11px; }
+/* Home: the last tile is a stack of covers that opens all projects */
+.stack-card { cursor: pointer; }
+.stack-art { position: relative; display: block; aspect-ratio: 1; }
+.stack-layer { position: absolute; left: 9%; right: 9%; bottom: 0; aspect-ratio: 1; border-radius: 12px; background: var(--fill-2) center / cover no-repeat;
+  box-shadow: 0 8px 22px rgba(0,0,0,.45), inset 0 0 0 1px rgba(255,255,255,.08);
+  transform: translateY(calc(var(--k) * -7%)) scale(calc(1 - var(--k) * .07)) rotate(calc(var(--k) * -3deg)); opacity: calc(1 - var(--k) * .22);
+  transition: transform .3s var(--ease); }
+.stack-card:hover .stack-layer { transform: translateY(calc(var(--k) * -11%)) scale(calc(1 - var(--k) * .06)) rotate(calc(var(--k) * -6deg)); }
+.stack-layer.disc { border-radius: 50%; }
+.back-btn svg { transform: rotate(180deg); }
+.all-title { margin: 4px 0 12px; font-size: 26px; letter-spacing: -0.04em; font-weight: 600; }
