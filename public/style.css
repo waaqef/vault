@@ -1347,14 +1347,22 @@ button.gs-step:active { transform: scale(.98); }
 .item.pick { cursor: pointer; font-family: var(--sans); font-size: 14px; color: var(--fg); gap: 10px; }
 .item.pick input { width: 18px; height: 18px; accent-color: var(--fg); }
 .pick-n { min-width: 22px; height: 22px; border-radius: 11px; display: grid; place-items: center; background: var(--fg); color: var(--bg); font-size: 11px; }
-/* Home: the last tile is a stack of covers that opens all projects */
+/* Home: the last tile is a folder (same size as a cover) with the next covers peeking out of it */
 .stack-card { cursor: pointer; }
-.stack-art { position: relative; display: block; aspect-ratio: 1; }
-.stack-layer { position: absolute; left: 9%; right: 9%; bottom: 0; aspect-ratio: 1; border-radius: 12px; background: var(--fill-2) center / cover no-repeat;
-  box-shadow: 0 8px 22px rgba(0,0,0,.45), inset 0 0 0 1px rgba(255,255,255,.08);
-  transform: translateY(calc(var(--k) * -7%)) scale(calc(1 - var(--k) * .07)) rotate(calc(var(--k) * -3deg)); opacity: calc(1 - var(--k) * .22);
-  transition: transform .3s var(--ease); }
-.stack-card:hover .stack-layer { transform: translateY(calc(var(--k) * -11%)) scale(calc(1 - var(--k) * .06)) rotate(calc(var(--k) * -6deg)); }
+.stack-art { position: relative; overflow: hidden; background: var(--fill-1); }
+.stack-layer { position: absolute; top: 9%; left: 50%; width: 58%; aspect-ratio: 1; border-radius: 9px; background: var(--fill-2) center / cover no-repeat;
+  box-shadow: 0 6px 18px rgba(0,0,0,.5); translate: -50% 0;
+  transform: translateX(calc((var(--k) - 1) * 26%)) rotate(calc((var(--k) - 1) * 9deg)); transition: transform .35s var(--ease), top .35s var(--ease); }
+.stack-layer:nth-child(2) { z-index: 1; top: 6%; }
 .stack-layer.disc { border-radius: 50%; }
+.stack-card:hover .stack-layer { top: 3%; transform: translateX(calc((var(--k) - 1) * 32%)) rotate(calc((var(--k) - 1) * 13deg)); }
+.stack-card:hover .stack-layer:nth-child(2) { top: 0; }
+/* the folder front: frosted, with a tab, fading the covers behind it */
+.stack-folder { position: absolute; left: 0; right: 0; bottom: 0; height: 56%; z-index: 2; border-radius: 4px 14px 0 0;
+  background: linear-gradient(180deg, rgba(60,60,60,.55), rgba(24,24,24,.92)); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.18); display: grid; place-items: center; }
+.stack-folder::before { content: ""; position: absolute; left: 0; bottom: 100%; width: 40%; height: 10%; border-radius: 10px 10px 0 0;
+  background: rgba(60,60,60,.55); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); box-shadow: inset 0 1px 0 rgba(255,255,255,.18); }
+.stack-n { font-size: 22px; font-weight: 600; letter-spacing: -0.03em; color: var(--fg); opacity: .9; }
 .back-btn svg { transform: rotate(180deg); }
 .all-title { margin: 4px 0 12px; font-size: 26px; letter-spacing: -0.04em; font-weight: 600; }

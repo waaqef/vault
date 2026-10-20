@@ -517,7 +517,9 @@ function renderHome(toolbar) {
     const open = () => { S.homeAll = true; renderMain(); };
     return h('div', { className: 'card-grid' }, shown.map(card), more && h('div', { className: 'card stack-card', role: 'button', tabIndex: 0, style: { '--i': Math.min(n++, 14) },
       'aria-label': `All projects, ${list.length}`, onclick: open, onkeydown(e) { if (e.key === 'Enter') open(); } },
-      h('span', { className: 'stack-art' }, rest.slice(0, 3).reverse().map((p, i, a) => h('span', { className: 'stack-layer' + (p.cover ? '' : ' disc'), style: { ...bg(p.cover), '--k': a.length - 1 - i } }))),
+      h('span', { className: 'card-art stack-art' },
+        rest.slice(0, 3).map((p, i) => h('span', { className: 'stack-layer' + (p.cover ? '' : ' disc'), style: { ...bg(p.cover), '--k': i } })),
+        h('span', { className: 'stack-folder' }, h('span', { className: 'stack-n' }, `+${rest.length}`))),
       h('span', { className: 'card-t' }, 'All projects'),
       h('span', { className: 'card-s mono' }, `${list.length} projects`)));
   };
