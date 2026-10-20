@@ -1371,3 +1371,5 @@ button.gs-step:active { transform: scale(.98); }
   background: var(--grain) 0 0 / 120px, linear-gradient(150deg, rgba(255,255,255,.16), rgba(255,255,255,0) 50%, rgba(255,255,255,.06)); }
 .back-btn svg { transform: rotate(180deg); }
 .all-title { margin: 4px 0 12px; font-size: 26px; letter-spacing: -0.04em; font-weight: 600; }
+/* depth of field: the covers behind the middle one are slightly out of focus */
+.stack-layer:not(:nth-child(2)) { filter: blur(1.6px) brightness(.88); }
