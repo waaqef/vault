@@ -67,7 +67,9 @@ async function userFromCookie(req, env) {
 }
 const USERNAME_RE = /^[a-z0-9._-]{3,24}$/;
 const publicUser = (u, extra = {}) => ({ id: u.id, username: u.username, avatar: u.avatar || null, isAdmin: !!u.is_admin,
-  storage: u.storage, driveConnected: !!u.drive_refresh, ...extra });
+  storage: u.storage, driveConnected: !!u.drive_refresh, home: homeOf(u), ...extra });
+// The person's Home layout: sections in order, built-in ones switched on/off, and their own named sections of projects.
+const homeOf = u => { try { const h = JSON.parse(u.home_layout || 'null'); return Array.isArray(h) ? h : null; } catch { return null; } };
 const AVATAR_RE = /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]{20,200000}$/;
 
 // ---- lockout after repeated wrong passwords/keys: 5 tries per 15 minutes per address ----
@@ -766,6 +768,13 @@ on('POST', '/api/password', async (req, env, b, p, url, ctx, u) => {
 });
 // Profile picture (a small JPEG made in the browser, kept in the database) and username.
 on('PATCH', '/api/me', async (req, env, b, p, url, ctx, u) => {
+  if ('home' in b) {
+    const ok = b.home === null || (Array.isArray(b.home) && b.home.length <= 40 && b.home.every(x => x && typeof x.k === 'string'
+      && (x.k !== 'custom' || (typeof x.name === 'string' && x.name.length <= 60 && Array.isArray(x.projects) && x.projects.length <= 100))));
+    const text = b.home === null ? null : JSON.stringify(b.home);
+    if (!ok || (text && text.length > 20000)) return fail("That layout couldn't be saved.");
+    await env.DB.prepare('UPDATE users SET home_layout = ? WHERE id = ?').bind(text, u.id).run();
+  }
   if ('avatar' in b) {
     if (b.avatar !== null && !AVATAR_RE.test(b.avatar || '')) return fail('That picture didn\'t work. Try another one.');
     await env.DB.prepare('UPDATE users SET avatar = ? WHERE id = ?').bind(b.avatar, u.id).run();

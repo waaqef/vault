@@ -1339,3 +1339,11 @@ button.gs-step:active { transform: scale(.98); }
 .projects-row .card { flex: 0 0 158px; }
 .home-foot { display: flex; justify-content: center; padding: 18px 0 8px; }
 @media (max-width: 760px) { .projects-row .card { flex-basis: 138px; } }
+/* customize home */
+.layout-row .layout-move { display: flex; flex-direction: column; gap: 0; margin-left: -6px; }
+.layout-row .layout-move .icon-btn { width: 24px; height: 18px; }
+.layout-row.off .grow { opacity: .45; }
+.pick-list { max-height: 46dvh; overflow-y: auto; }
+.item.pick { cursor: pointer; font-family: var(--sans); font-size: 14px; color: var(--fg); gap: 10px; }
+.item.pick input { width: 18px; height: 18px; accent-color: var(--fg); }
+.pick-n { min-width: 22px; height: 22px; border-radius: 11px; display: grid; place-items: center; background: var(--fg); color: var(--bg); font-size: 11px; }

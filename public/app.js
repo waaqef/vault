@@ -550,7 +550,9 @@ function renderHome(toolbar) {
         h('div', { className: 'gs-step' },
           h('span', { className: 'gs-n mono' }, '3'), h('b', {}, 'Share it'), h('span', {}, 'Open a project and tap Share to send a link or add people.')))),
     // projects: one row of the most recent (two on phones), the full grid with folder filters behind "See all"
-    ...(S.homeAll ? ['projects'] : homeLayout()).map(k => ({
+    ...(S.homeAll ? [{ k: 'projects' }] : homeLayout().filter(x => x.on)).map(x => x.k === 'custom'
+      ? projectShelf(x.name, x.projects.map(projectOf).filter(Boolean))
+      : ({
       projects: () => S.projects.length > 0 && h('section', { className: 'shelf' },
         h('div', { className: 'shelf-h' }, h('h2', {}, S.homeAll ? 'All projects' : 'Recent projects'),
           h('span', { className: 'shelf-acts' },
@@ -563,7 +565,7 @@ function renderHome(toolbar) {
       shared: () => projectShelf('Shared with me', S.sharedProjects.slice(0, 12)),
       starred: () => shelf('Starred', starred, () => setView({ type: 'starred' })),
       added: () => shelf('Recently added', newest.slice(0, 12), () => setView({ type: 'all' })),
-    })[k]?.()),
+    })[x.k]?.()),
     !S.homeAll && (S.tracks.length > 0 || S.projects.length > 0) && h('div', { className: 'home-foot' }, h('button', { className: 'btn ghost', onclick: customizeHome }, icon('sliders', 15), 'Customize home')));
 
   const key = JSON.stringify(S.view) + S.homeFolder + S.homeAll;
@@ -574,24 +576,59 @@ function renderHome(toolbar) {
   renderBulk();
 }
 
-// Home sections: which show, in what order. Kept on this device; songs are off by default to keep Home calm.
+// Home layout: built-in sections (on/off) and your own named sections of projects, in your order.
+// Saved to your account, so it's the same on every device.
 const HOME_SECTIONS = { projects: 'Recent projects', shared: 'Shared with me', starred: 'Starred songs', added: 'Recently added songs' };
-const homeLayout = () => store.get('homeLayout', ['projects', 'shared']).filter(k => HOME_SECTIONS[k]);
+function homeLayout() {
+  const saved = (S.me?.home || [{ k: 'projects', on: true }, { k: 'shared', on: true }]).filter(x => x.k === 'custom' || HOME_SECTIONS[x.k]);
+  return [...saved, ...Object.keys(HOME_SECTIONS).filter(k => !saved.some(x => x.k === k)).map(k => ({ k, on: false }))];
+}
 function customizeHome() {
-  let order = [...homeLayout(), ...Object.keys(HOME_SECTIONS).filter(k => !homeLayout().includes(k))];
-  const on = new Set(homeLayout());
+  let layout = homeLayout().map(x => ({ ...x }));
   const list = h('div', { className: 'list' });
-  const draw = () => fill(list, order.map((k, i) => h('div', { className: 'item' },
-    h('input', { type: 'checkbox', className: 'toggle', checked: on.has(k), 'aria-label': `Show ${HOME_SECTIONS[k]}`, onchange() { this.checked ? on.add(k) : on.delete(k); } }),
-    h('span', { className: 'grow' }, HOME_SECTIONS[k]),
-    h('button', { type: 'button', className: 'icon-btn sm', 'aria-label': `Move ${HOME_SECTIONS[k]} up`, disabled: i === 0, onclick: () => { [order[i - 1], order[i]] = [order[i], order[i - 1]]; draw(); } }, icon('up', 14)),
-    h('button', { type: 'button', className: 'icon-btn sm', 'aria-label': `Move ${HOME_SECTIONS[k]} down`, disabled: i === order.length - 1, onclick: () => { [order[i + 1], order[i]] = [order[i], order[i + 1]]; draw(); } }, icon('down', 14)))));
+  const move = (i, d) => { [layout[i + d], layout[i]] = [layout[i], layout[i + d]]; draw(); };
+  const draw = () => fill(list, layout.map((x, i) => h('div', { className: 'item layout-row' + (x.on ? '' : ' off') },
+    h('span', { className: 'layout-move' },
+      h('button', { type: 'button', className: 'icon-btn sm', 'aria-label': 'Move up', disabled: i === 0, onclick: () => move(i, -1) }, icon('up', 14)),
+      h('button', { type: 'button', className: 'icon-btn sm', 'aria-label': 'Move down', disabled: i === layout.length - 1, onclick: () => move(i, 1) }, icon('down', 14))),
+    h('span', { className: 'grow' }, x.k === 'custom' ? x.name : HOME_SECTIONS[x.k],
+      x.k === 'custom' && h('small', { className: 'muted' }, ` · ${x.projects.length} ${x.projects.length === 1 ? 'project' : 'projects'}`)),
+    x.k === 'custom'
+      ? [h('button', { type: 'button', className: 'btn ghost', onclick: async () => { const r = await sectionEditor(x); if (r) { Object.assign(x, r); draw(); } } }, 'Edit'),
+         h('button', { type: 'button', className: 'icon-btn sm', 'aria-label': `Delete ${x.name}`, onclick: () => { layout.splice(i, 1); draw(); } }, icon('trash', 14))]
+      : h('input', { type: 'checkbox', className: 'toggle', checked: x.on, 'aria-label': `Show ${HOME_SECTIONS[x.k]}`, onchange() { x.on = this.checked; draw(); } }))));
   draw();
   const d = dialog(h('div', { className: 'stack' }, h('h2', {}, 'Customize home'),
-    h('p', { className: 'muted', style: { margin: 0 } }, 'Choose what shows on Home and in what order. Saved on this device.'), list,
+    h('p', { className: 'muted', style: { margin: 0 } }, 'Reorder sections, switch them on or off, or make your own section of hand-picked projects.'), list,
+    h('button', { type: 'button', className: 'btn', onclick: async () => { const r = await sectionEditor(null); if (r) { layout.unshift({ k: 'custom', id: crypto.randomUUID().slice(0, 8), on: true, ...r }); draw(); } } }, icon('plus', 15), 'New section'),
     h('div', { className: 'btns' },
-      h('button', { className: 'btn ghost', onclick: () => { order = Object.keys(HOME_SECTIONS); on.clear(); ['projects', 'shared'].forEach(k => on.add(k)); draw(); } }, 'Reset'),
-      h('button', { className: 'btn primary', onclick: () => { store.set('homeLayout', order.filter(k => on.has(k))); d.close(); renderMain(); } }, 'Save'))));
+      h('button', { type: 'button', className: 'btn ghost', onclick: () => { layout = [{ k: 'projects', on: true }, { k: 'shared', on: true }, { k: 'starred', on: false }, { k: 'added', on: false }]; draw(); } }, 'Reset'),
+      h('button', { type: 'button', className: 'btn primary', async onclick() {
+        try { await api('/me', { method: 'PATCH', body: { home: layout } }); S.me.home = layout; d.close(); renderMain(); } catch (e) { oops(e); }
+      } }, 'Save'))), { className: 'settings-dlg' });
+}
+// Make or edit a custom section: a name, and projects picked in the order you tick them.
+function sectionEditor(sec) {
+  return new Promise(res => {
+    const picked = [...(sec?.projects || [])];
+    const name = h('input', { type: 'text', value: sec?.name || '', placeholder: 'e.g. For the EP', maxLength: 60, required: true, 'aria-label': 'Section name' });
+    const all = [...S.projects, ...S.sharedProjects.filter(p => !p.single)];
+    const box = h('div', { className: 'list pick-list' });
+    const draw = () => fill(box, all.map(p => h('label', { className: 'item pick' },
+      h('input', { type: 'checkbox', checked: picked.includes(p.id), onchange() { const at = picked.indexOf(p.id); this.checked ? at < 0 && picked.push(p.id) : at >= 0 && picked.splice(at, 1); draw(); } }),
+      thumb(p.cover), h('span', { className: 'grow' }, p.name, p.owner && h('small', { className: 'muted' }, ` · ${p.owner}`)),
+      picked.includes(p.id) && h('span', { className: 'num pick-n' }, picked.indexOf(p.id) + 1))));
+    draw();
+    let done = false;
+    const d = dialog(h('form', { className: 'stack', onsubmit(e) {
+      e.preventDefault();
+      if (!picked.length) return toast('Pick at least one project', { error: true });
+      done = true; res({ name: name.value.trim(), projects: [...picked] }); d.close();
+    } }, h('h2', {}, sec ? 'Edit section' : 'New section'), h('label', {}, 'Name', name),
+    h('span', { className: 'mono', style: { fontSize: '11px', color: 'var(--fg-3)' } }, 'Projects (they show in the order you tick them)'), box,
+    h('div', { className: 'btns' }, h('button', { type: 'button', className: 'btn ghost', onclick: () => d.close() }, 'Cancel'), h('button', { className: 'btn primary' }, sec ? 'Done' : 'Add section'))), { className: 'settings-dlg' });
+    d.addEventListener('close', () => { if (!done) res(null); });
+  });
 }
 
 function renderList(animate = false) {
