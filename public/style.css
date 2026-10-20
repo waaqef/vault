@@ -1375,18 +1375,19 @@ button.gs-step:active { transform: scale(.98); }
 .stack-layer:not(:nth-child(2)) { filter: blur(.7px) brightness(.92); }
 /* projects glow in their cover's colours on hover: a blurred, slowly turning wash behind the cover that eases in */
 .card { position: relative; isolation: isolate; --g1: rgba(255,255,255,.55); --g2: rgba(200,200,255,.45); --g3: rgba(255,220,200,.45); }
-.card::before { content: ""; position: absolute; z-index: -1; left: -3%; right: -3%; top: -3%; aspect-ratio: 1; border-radius: 30%;
-  background: conic-gradient(var(--g1), var(--g2), var(--g3), var(--g1)); filter: blur(22px); opacity: 0; transform: scale(.92);
+.card::before { content: ""; position: absolute; z-index: -1; left: -4%; right: -4%; top: -4%; aspect-ratio: 1; border-radius: 50%;
+  background: radial-gradient(circle at 32% 34%, var(--g1), transparent 62%), radial-gradient(circle at 70% 40%, var(--g2), transparent 62%),
+    radial-gradient(circle at 48% 72%, var(--g3), transparent 62%);
+  filter: blur(34px); opacity: 0; transform: scale(.94);
   transition: opacity 1.1s cubic-bezier(.22, .61, .36, 1), transform 1.1s cubic-bezier(.22, .61, .36, 1);
-  animation: glow-turn 5s linear infinite, glow-shift 3.2s ease-in-out infinite alternate; animation-play-state: paused; pointer-events: none; }
-.card:hover::before, .card:focus-visible::before { opacity: .75; transform: scale(1.06); animation-play-state: running; }
+  animation: glow-turn 14s linear infinite, glow-shift 6s ease-in-out infinite alternate; animation-play-state: paused; pointer-events: none; }
+.card:hover::before, .card:focus-visible::before { opacity: .6; transform: scale(1.08); animation-play-state: running; }
 .stack-card::before { display: none; }
 @keyframes glow-turn { to { rotate: 360deg; } }
 /* the colours drift: the cover's hues sway back and forth and brighten, while the wash turns */
-@keyframes glow-shift {
-  0% { filter: blur(22px) hue-rotate(-35deg) saturate(1.2) brightness(1); }
-  50% { filter: blur(24px) hue-rotate(0deg) saturate(1.6) brightness(1.15); }
-  100% { filter: blur(22px) hue-rotate(35deg) saturate(1.3) brightness(1.05); } }
+@keyframes glow-shift { /* a gentle sway that stays close to the cover's own colours */
+  0% { filter: blur(34px) hue-rotate(-12deg) saturate(1.2); }
+  100% { filter: blur(36px) hue-rotate(12deg) saturate(1.4) brightness(1.08); } }
 .card:hover .card-art, :root.refined .card:hover .card-art, :root.glassy .card:hover .card-art { box-shadow: 0 14px 30px rgba(0,0,0,.4), 0 0 0 1px rgba(255,255,255,.12); }
 .card .card-art { transition: transform .35s var(--ease), box-shadow .6s ease; }
 @media (prefers-reduced-motion: reduce) { .card::before { animation: none; } }
