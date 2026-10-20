@@ -66,7 +66,10 @@ async function userFromCookie(req, env) {
   return c && same(c, await legacyOwnerToken(env)) ? getUser(env, OWNER) : null;
 }
 const USERNAME_RE = /^[a-z0-9._-]{3,24}$/;
-const publicUser = (u, extra = {}) => ({ id: u.id, username: u.username, avatar: u.avatar || null, isAdmin: !!u.is_admin,
+// Usernames are unique (for signing in and adding people); the display name is what others see, and needn't be.
+const nameOf = u => u.display_name || u.username;
+const cleanName = (v, max) => String(v ?? '').replace(/[\u0000-\u001f\u007f]/g, '').replace(/\s+/g, ' ').trim().slice(0, max);
+const publicUser = (u, extra = {}) => ({ id: u.id, username: u.username, displayName: u.display_name || null, avatar: u.avatar || null, isAdmin: !!u.is_admin,
   storage: u.storage, driveConnected: !!u.drive_refresh, home: homeOf(u), ...extra });
 // The person's Home layout: sections in order, built-in ones switched on/off, and their own named sections of projects.
 const homeOf = u => { try { const h = JSON.parse(u.home_layout || 'null'); return Array.isArray(h) ? h : null; } catch { return null; } };
@@ -177,11 +180,6 @@ const memberTrack = (env, u, id) => env.DB.prepare(`SELECT t.*, p.owner_id FROM 
 const logActivity = (env, projectId, u, text) => env.DB.prepare('INSERT INTO activity (project_id, user_id, text, created_at) VALUES (?, ?, ?, ?)').bind(projectId, u.id, text.slice(0, 300), now()).run().catch(() => {});
 // The account whose storage holds a project's files.
 const storeOf = (env, ownerId, u) => (ownerId === u.id ? u : getUser(env, ownerId));
-// Who owns a project / track (for deletes and share pages).
-const projectOwner = async (env, projectId) => {
-  const p = await env.DB.prepare('SELECT owner_id FROM projects WHERE id = ?').bind(projectId).first();
-  return p && getUser(env, p.owner_id);
-};
 // Storage used by this user, counted from the database (versions and trash included).
 const usage = async (env, u) => (await env.DB.prepare(`SELECT COALESCE(SUM(v.size), 0) AS n FROM track_versions v JOIN tracks t ON t.id = v.track_id WHERE t.project_id IN ${MY_PROJECTS}`).bind(u.id).first()).n;
 const adminUsage = async env => (await env.DB.prepare(`SELECT COALESCE(SUM(v.size), 0) AS n FROM track_versions v JOIN tracks t ON t.id = v.track_id JOIN projects p ON p.id = t.project_id JOIN users u ON u.id = p.owner_id WHERE u.storage = 'b2'`).first()).n;
@@ -200,47 +198,82 @@ const on = (method, path, fn) =>
   routes.push([method, new RegExp('^' + path.replace(/:(\w+)/g, '(?<$1>[^/]+)') + '$'), fn]);
 
 async function update(env, table, id, body, fields) {
+  // A name has to be text and can't be blank (a blank one is ignored, so it keeps the old name)
+  if ('name' in body) { body.name = cleanName(body.name, table === 'tracks' ? 300 : 200); if (!body.name) delete body.name; }
   const keys = Object.keys(body).filter(k => fields.includes(k));
   if (!keys.length) return;
   await env.DB.prepare(`UPDATE ${table} SET ${keys.map(k => `${k} = ?`).join(', ')} WHERE id = ?`)
     .bind(...keys.map(k => body[k] ?? null), id).run();
 }
 
-// ---- permanent deletes (used by the trash) ----
-async function deleteTrack(env, id) {
-  const t = await env.DB.prepare('SELECT cover, project_id FROM tracks WHERE id = ?').bind(id).first();
-  if (!t) return;
-  const owner = await projectOwner(env, t.project_id);
-  const { results: vs } = await env.DB.prepare('SELECT file_key FROM track_versions WHERE track_id = ?').bind(id).all();
-  await Promise.all([...vs.map(v => remove(env, v.file_key, owner)), remove(env, t.cover, owner)]);
+// ---- permanent deletes (the trash, deleting an account) ----
+// A Worker on the free plan may make only 50 requests per call, and database queries and file deletes both count.
+// So each call does what fits in a budget of requests (`budget.n`) and reports `more` for the rest; the app asks again.
+const BUDGET = 40;
+// Deletes the stored files of some tracks (`tracks`: SQL listing their ids, with `args`): versions, then covers.
+// True once none are left. Keeps 2 requests spare for the caller's own clean-up.
+async function dropFiles(env, tracks, args, owner, budget) {
+  const room = budget.n - 4;
+  if (room < 1) return false;
+  const [{ results: vs }, { results: cs }] = await env.DB.batch([
+    env.DB.prepare(`SELECT id, file_key AS k, 1 AS version FROM track_versions WHERE track_id IN (${tracks}) LIMIT ?`).bind(...args, room),
+    env.DB.prepare(`SELECT id, cover AS k, 0 AS version FROM tracks WHERE cover IS NOT NULL AND cover != '' AND id IN (${tracks}) LIMIT ?`).bind(...args, room),
+  ]);
+  budget.n--;
+  const files = [...vs, ...cs].slice(0, room);
+  if (!files.length) return true;
+  budget.n -= files.length + 1;
+  await Promise.all(files.map(f => remove(env, f.k, owner)));
+  await env.DB.batch(files.map(f => env.DB.prepare(f.version ? 'DELETE FROM track_versions WHERE id = ?' : 'UPDATE tracks SET cover = NULL WHERE id = ?').bind(f.id)));
+  return files.length < room;
+}
+// Both return true when it's all gone, false when there's more to do on another call.
+async function deleteTrack(env, id, budget = { n: BUDGET }) {
+  const owner = await env.DB.prepare('SELECT u.* FROM tracks t JOIN projects p ON p.id = t.project_id JOIN users u ON u.id = p.owner_id WHERE t.id = ?').bind(id).first();
+  budget.n--;
+  if (!owner) return true;
+  if (!(await dropFiles(env, 'SELECT ?', [id], owner, budget))) return false;
   await env.DB.batch([
-    env.DB.prepare('DELETE FROM track_versions WHERE track_id = ?').bind(id),
     env.DB.prepare('DELETE FROM comments WHERE track_id = ?').bind(id),
     env.DB.prepare("DELETE FROM shares WHERE kind = 'track' AND target_id = ?").bind(id),
     env.DB.prepare('DELETE FROM tracks WHERE id = ?').bind(id),
   ]);
+  budget.n--;
+  return true;
 }
-async function deleteProject(env, id) {
-  const p = await env.DB.prepare('SELECT cover, owner_id FROM projects WHERE id = ?').bind(id).first();
-  if (!p) return;
-  const { results: tracks } = await env.DB.prepare('SELECT id FROM tracks WHERE project_id = ?').bind(id).all();
-  for (const t of tracks) await deleteTrack(env, t.id);
-  await remove(env, p.cover, await getUser(env, p.owner_id));
+async function deleteProject(env, id, budget = { n: BUDGET }) {
+  const p = await env.DB.prepare('SELECT p.cover AS project_cover, u.* FROM projects p JOIN users u ON u.id = p.owner_id WHERE p.id = ?').bind(id).first();
+  budget.n--;
+  if (!p) return true;
+  const tracks = 'SELECT id FROM tracks WHERE project_id = ?';
+  if (!(await dropFiles(env, tracks, [id], p, budget))) return false;
+  if (p.project_cover) { await remove(env, p.project_cover, p); budget.n--; }
   await env.DB.batch([
+    env.DB.prepare(`DELETE FROM comments WHERE track_id IN (${tracks})`).bind(id),
+    env.DB.prepare(`DELETE FROM shares WHERE kind = 'track' AND target_id IN (${tracks})`).bind(id),
+    env.DB.prepare('DELETE FROM tracks WHERE project_id = ?').bind(id),
     env.DB.prepare("DELETE FROM shares WHERE kind = 'project' AND target_id = ?").bind(id),
     env.DB.prepare('DELETE FROM project_members WHERE project_id = ?').bind(id),
+    env.DB.prepare('DELETE FROM activity WHERE project_id = ?').bind(id),
     env.DB.prepare('DELETE FROM projects WHERE id = ?').bind(id),
   ]);
+  budget.n--;
+  return true;
 }
-// Anything in the trash longer than 30 days goes for good (a few at a time, whenever a library loads).
+// Deletes these projects, then these tracks, for as long as the budget lasts. True when all are gone.
+async function deleteAll(env, projects, tracks, budget = { n: BUDGET }) {
+  for (const id of projects) if (!(await deleteProject(env, id, budget))) return false;
+  for (const id of tracks) if (!(await deleteTrack(env, id, budget))) return false;
+  return true;
+}
+// Anything in the trash longer than 30 days goes for good (a little at a time, whenever a library loads).
 async function purgeOldTrash(env) {
   const cutoff = now() - TRASH_DAYS * DAY;
   const [p, t] = await env.DB.batch([
     env.DB.prepare('SELECT id FROM projects WHERE deleted_at < ? LIMIT 5').bind(cutoff),
     env.DB.prepare('SELECT id FROM tracks WHERE deleted_at < ? LIMIT 10').bind(cutoff),
   ]);
-  for (const r of p.results) await deleteProject(env, r.id);
-  for (const r of t.results) await deleteTrack(env, r.id);
+  await deleteAll(env, p.results.map(r => r.id), t.results.map(r => r.id), { n: 20 }); // shares the call with the library load
   await env.DB.batch([
     env.DB.prepare('DELETE FROM activity WHERE created_at < ?').bind(now() - 90 * DAY),
     env.DB.prepare('DELETE FROM inbox WHERE created_at < ?').bind(now() - 60 * DAY),
@@ -248,12 +281,12 @@ async function purgeOldTrash(env) {
 }
 
 // Projects shared with this user (added as a viewer/editor, or saved from a link), and single saved tracks.
-const SHARED_P = `SELECT p.id, p.name, p.cover, p.created_at, u.username AS owner,
+const SHARED_P = `SELECT p.id, p.name, p.cover, p.created_at, COALESCE(u.display_name, u.username) AS owner,
     COALESCE((SELECT role FROM project_members m WHERE m.project_id = p.id AND m.user_id = ?), 'viewer') AS role,
     EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = p.id AND m.user_id = ?) AS member
   FROM projects p JOIN users u ON u.id = p.owner_id WHERE p.deleted_at IS NULL AND p.owner_id != ? AND p.id IN ${READABLE} ORDER BY p.name COLLATE NOCASE`;
 const SHARED_T = `SELECT * FROM tracks WHERE deleted_at IS NULL AND project_id IN (SELECT p.id FROM projects p WHERE p.deleted_at IS NULL AND p.owner_id != ? AND p.id IN ${READABLE}) ORDER BY position, created_at`;
-const SAVED_T = `SELECT t.*, u.username AS owner, p.cover AS project_cover FROM tracks t JOIN projects p ON p.id = t.project_id JOIN users u ON u.id = p.owner_id
+const SAVED_T = `SELECT t.*, COALESCE(u.display_name, u.username) AS owner, p.cover AS project_cover FROM tracks t JOIN projects p ON p.id = t.project_id JOIN users u ON u.id = p.owner_id
   WHERE t.deleted_at IS NULL AND p.deleted_at IS NULL AND p.owner_id != ? AND t.id IN ${LINKED('track')} AND t.project_id NOT IN ${READABLE}`;
 
 const liveTracks = `deleted_at IS NULL AND project_id IN (SELECT id FROM projects WHERE deleted_at IS NULL AND owner_id = ?)`;
@@ -392,6 +425,7 @@ const TRACK_FIELDS = ['name', 'project_id', 'bpm', 'musical_key', 'tags', 'cover
 on('PATCH', '/api/tracks/:id', async (req, env, b, { id }, url, ctx, u) => {
   const old = await editTrack(env, u, id);
   if (!old) return fail('Not found', 404);
+  if ('project_id' in b && !b.project_id) delete b.project_id; // a track always stays in a project
   // Moving is only within the same owner's projects (the file stays in that owner's storage).
   if (b.project_id && (await editProject(env, u, b.project_id))?.owner_id !== old.owner_id) return fail('Project not found', 404);
   const owner = await storeOf(env, old.owner_id, u);
@@ -449,19 +483,18 @@ on('POST', '/api/trash/restore', async (req, env, b, p, url, ctx, u) => {
   else await env.DB.prepare(`UPDATE tracks SET deleted_at = NULL WHERE id = ? AND project_id IN ${MY_PROJECTS}`).bind(b.id, u.id).run();
   return json({ ok: true });
 });
+// Deleting for good: only things already in the trash. Big ones take a few calls ({ more: true } until done).
 on('DELETE', '/api/trash/:kind/:id', async (req, env, b, { kind, id }, url, ctx, u) => {
-  if (kind === 'project') { if (await ownProject(env, u, id)) await deleteProject(env, id); }
-  else if (await ownTrack(env, u, id)) await deleteTrack(env, id);
-  return json({ ok: true });
+  const x = await (kind === 'project' ? ownProject : ownTrack)(env, u, id);
+  if (!x?.deleted_at) return json({ ok: true });
+  return json({ ok: true, more: !(await (kind === 'project' ? deleteProject : deleteTrack)(env, id)) });
 });
 on('POST', '/api/trash/empty', async (req, env, b, p, url, ctx, u) => {
   const [pr, t] = await env.DB.batch([
-    env.DB.prepare('SELECT id FROM projects WHERE deleted_at IS NOT NULL AND owner_id = ?').bind(u.id),
-    env.DB.prepare(`SELECT id FROM tracks WHERE deleted_at IS NOT NULL AND project_id IN ${MY_PROJECTS}`).bind(u.id),
+    env.DB.prepare('SELECT id FROM projects WHERE deleted_at IS NOT NULL AND owner_id = ? LIMIT 50').bind(u.id),
+    env.DB.prepare(`SELECT id FROM tracks WHERE deleted_at IS NOT NULL AND project_id IN ${MY_PROJECTS} LIMIT 50`).bind(u.id),
   ]);
-  for (const r of t.results) await deleteTrack(env, r.id);
-  for (const r of pr.results) await deleteProject(env, r.id);
-  return json({ ok: true });
+  return json({ ok: true, more: !(await deleteAll(env, pr.results.map(r => r.id), t.results.map(r => r.id))) });
 });
 
 // Versions: applying an edit adds a version and points the track at it. Older versions stay for revert.
@@ -500,10 +533,10 @@ on('DELETE', '/api/versions/:id', async (req, env, b, { id }, url, ctx, u) => {
 // Old versions = every version that isn't the one a track currently uses.
 const OLD_VERSIONS = `FROM track_versions v JOIN tracks t ON t.id = v.track_id WHERE v.file_key != t.file_key AND t.project_id IN ${MY_PROJECTS}`;
 on('GET', '/api/versions/old', async (req, env, b, p, url, ctx, u) => json(await env.DB.prepare(`SELECT COUNT(*) AS count, COALESCE(SUM(v.size), 0) AS size ${OLD_VERSIONS}`).bind(u.id).first()));
-// ponytail: 40 files per request keeps under the Workers subrequest limit; the app calls again until none are left.
+// ponytail: 30 files per request keeps under the free plan's 50 requests per call; the app calls again until none are left.
 on('POST', '/api/versions/cleanup', async (req, env, b, p, url, ctx, u) => {
   const one = typeof b.track_id === 'string', where = one ? ' AND v.track_id = ?' : '', args = one ? [u.id, b.track_id] : [u.id];
-  const { results } = await env.DB.prepare(`SELECT v.id, v.file_key, v.size ${OLD_VERSIONS}${where} LIMIT 40`).bind(...args).all();
+  const { results } = await env.DB.prepare(`SELECT v.id, v.file_key, v.size ${OLD_VERSIONS}${where} LIMIT 30`).bind(...args).all();
   // Only forget a version once its file is really gone, so nothing is left behind using storage.
   const gone = await Promise.all(results.map(v => Promise.resolve(remove(env, v.file_key, u)).then(r => !r || r.ok !== false, () => false)));
   const done = results.filter((v, i) => gone[i]);
@@ -535,7 +568,9 @@ on('GET', '/api/storage', async (req, env, b, p, url, ctx, u) => {
 // Comments listeners left on share links
 on('GET', '/api/tracks/:id/comments', async (req, env, b, { id }, url, ctx, u) => {
   if (!(await memberTrack(env, u, id))) return fail('Not found', 404);
-  return json((await env.DB.prepare('SELECT id, name, at, body, created_at FROM comments WHERE track_id = ? ORDER BY created_at DESC LIMIT 500').bind(id).all()).results);
+  // [vault] people show by their current display name; visitors on share links by the name they typed
+  return json((await env.DB.prepare(`SELECT c.id, COALESCE(x.display_name, x.username, c.name) AS name, c.at, c.body, c.created_at, c.user_id
+    FROM comments c LEFT JOIN users x ON x.id = c.user_id WHERE c.track_id = ? ORDER BY c.created_at DESC LIMIT 500`).bind(id).all()).results);
 });
 on('POST', '/api/tracks/:id/comments', async (req, env, b, { id }, url, ctx, u) => {
   const t = await memberTrack(env, u, id);
@@ -543,7 +578,7 @@ on('POST', '/api/tracks/:id/comments', async (req, env, b, { id }, url, ctx, u) 
   const body = String(b.body || '').trim().slice(0, 1000);
   if (!body) return fail('Write something first');
   const at = b.at == null || !isFinite(b.at) ? null : Math.max(0, Number(b.at));
-  const c = { id: uid(), name: u.username, at, body, created_at: now(), user_id: u.id };
+  const c = { id: uid(), name: nameOf(u), at, body, created_at: now(), user_id: u.id };
   await env.DB.prepare("INSERT INTO comments (id, share_token, track_id, name, at, body, user_id, created_at) VALUES (?, '', ?, ?, ?, ?, ?, ?)").bind(c.id, id, c.name, at, body, u.id, c.created_at).run();
   await logActivity(env, t.project_id, u, `commented on “${t.name}”`);
   ctx?.waitUntil?.(commentNotify(ctx, env, url, t, t.owner_id, u.id, c, () => '/?track=' + t.id)); // keep running after the reply
@@ -694,31 +729,31 @@ on('GET', '/api/shares/:token/listens', async (req, env, b, { token }, url, ctx,
 // People added to a project by username: viewers can listen; editors can also add, remove, reorder and edit tracks.
 on('GET', '/api/projects/:id/members', async (req, env, b, { id }, url, ctx, u) => {
   if (!(await ownProject(env, u, id))) return fail('Not found', 404);
-  return json((await env.DB.prepare('SELECT x.id, x.username, x.avatar, m.role FROM project_members m JOIN users x ON x.id = m.user_id WHERE m.project_id = ? ORDER BY m.created_at').bind(id).all()).results);
+  return json((await env.DB.prepare('SELECT x.id, x.username, x.display_name, x.avatar, m.role FROM project_members m JOIN users x ON x.id = m.user_id WHERE m.project_id = ? ORDER BY m.created_at').bind(id).all()).results);
 });
 on('POST', '/api/projects/:id/members', async (req, env, b, { id }, url, ctx, u) => {
   const p = await ownProject(env, u, id);
   if (!p) return fail('Not found', 404);
   const role = b.role === 'editor' ? 'editor' : 'viewer';
-  const who = await env.DB.prepare('SELECT id, username FROM users WHERE username = ? AND (disabled IS NULL OR disabled = 0)').bind(String(b.username || '').trim().toLowerCase()).first();
+  const who = await env.DB.prepare('SELECT id, username, display_name FROM users WHERE username = ? AND (disabled IS NULL OR disabled = 0)').bind(String(b.username || '').trim().toLowerCase()).first();
   if (!who) return fail("There's no [vault] account with that username.", 404);
   if (who.id === u.id) return fail("That's you.");
   const had = await env.DB.prepare('SELECT 1 FROM project_members WHERE project_id = ? AND user_id = ?').bind(id, who.id).first();
   await env.DB.prepare('INSERT INTO project_members (project_id, user_id, role, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(project_id, user_id) DO UPDATE SET role = excluded.role').bind(id, who.id, role, now()).run();
-  if (!had) await logActivity(env, id, u, `added ${who.username} (${role === 'editor' ? 'can edit' : 'can listen'})`);
-  if (!had) notify(ctx, env, who.id, { title: `${u.username} shared “${p.name}” with you`, body: role === 'editor' ? 'You can listen and edit it.' : 'You can listen to it.', tag: 'member-' + id, url: '/' }, url.origin);
+  if (!had) await logActivity(env, id, u, `added ${nameOf(who)} (${role === 'editor' ? 'can edit' : 'can listen'})`);
+  if (!had) notify(ctx, env, who.id, { title: `${nameOf(u)} shared “${p.name}” with you`, body: role === 'editor' ? 'You can listen and edit it.' : 'You can listen to it.', tag: 'member-' + id, url: '/' }, url.origin);
   return json({ ok: true });
 });
 on('DELETE', '/api/projects/:id/members/:uid', async (req, env, b, { id, uid: who }, url, ctx, u) => {
   if (who !== u.id && !(await ownProject(env, u, id))) return fail('Not found', 404); // the owner removes anyone; people can remove themselves
   await env.DB.prepare('DELETE FROM project_members WHERE project_id = ? AND user_id = ?').bind(id, who).run();
   const gone = await getUser(env, who);
-  if (gone) await logActivity(env, id, u, who === u.id ? 'left the project' : `removed ${gone.username}`);
+  if (gone) await logActivity(env, id, u, who === u.id ? 'left the project' : `removed ${nameOf(gone)}`);
   return json({ ok: true });
 });
 on('GET', '/api/projects/:id/activity', async (req, env, b, { id }, url, ctx, u) => {
   if (!(await env.DB.prepare(`SELECT 1 FROM projects WHERE id = ? AND id IN ${MEMBER}`).bind(id, u.id, u.id).first())) return fail('Not found', 404);
-  return json((await env.DB.prepare('SELECT a.text, a.created_at, x.username, x.avatar FROM activity a LEFT JOIN users x ON x.id = a.user_id WHERE a.project_id = ? ORDER BY a.created_at DESC LIMIT 80').bind(id).all()).results);
+  return json((await env.DB.prepare('SELECT a.text, a.created_at, x.username, x.display_name, x.avatar FROM activity a LEFT JOIN users x ON x.id = a.user_id WHERE a.project_id = ? ORDER BY a.created_at DESC LIMIT 80').bind(id).all()).results);
 });
 // The inbox: newest first; opening it marks everything read.
 on('GET', '/api/inbox', async (req, env, b, p, url, ctx, u) =>
@@ -779,6 +814,7 @@ on('PATCH', '/api/me', async (req, env, b, p, url, ctx, u) => {
     if (b.avatar !== null && !AVATAR_RE.test(b.avatar || '')) return fail('That picture didn\'t work. Try another one.');
     await env.DB.prepare('UPDATE users SET avatar = ? WHERE id = ?').bind(b.avatar, u.id).run();
   }
+  if ('display_name' in b) await env.DB.prepare('UPDATE users SET display_name = ? WHERE id = ?').bind(cleanName(b.display_name, 40) || null, u.id).run();
   if ('username' in b) {
     const name = String(b.username || '').trim().toLowerCase();
     if (!USERNAME_RE.test(name)) return fail('Usernames are 3–24 letters, numbers, dots, dashes or underscores.');
@@ -860,7 +896,7 @@ on('DELETE', '/api/admin/requests/:id', async (req, env, b, { id }, url, ctx, u)
 });
 on('GET', '/api/admin/users', async (req, env, b, p, url, ctx, u) => {
   if (adminOnly(u)) return adminOnly(u);
-  const { results } = await env.DB.prepare(`SELECT x.id, x.username, x.avatar, x.is_admin, x.storage, x.disabled, x.created_at, x.drive_refresh IS NOT NULL AS drive,
+  const { results } = await env.DB.prepare(`SELECT x.id, x.username, x.display_name, x.avatar, x.is_admin, x.storage, x.disabled, x.created_at, x.drive_refresh IS NOT NULL AS drive,
       (SELECT COUNT(*) FROM tracks t JOIN projects p ON p.id = t.project_id WHERE p.owner_id = x.id AND t.deleted_at IS NULL) AS tracks,
       (SELECT COALESCE(SUM(v.size), 0) FROM track_versions v JOIN tracks t ON t.id = v.track_id JOIN projects p ON p.id = t.project_id WHERE p.owner_id = x.id) AS used
     FROM users x ORDER BY x.is_admin DESC, x.created_at`).all();
@@ -886,9 +922,10 @@ on('PATCH', '/api/admin/users/:id', async (req, env, b, { id }, url, ctx, u) => 
 // Big libraries take several calls: it answers { more: true } until everything is gone.
 async function deleteAccount(env, id) {
   const { results } = await env.DB.prepare('SELECT id FROM projects WHERE owner_id = ? LIMIT 20').bind(id).all();
-  for (const r of results) await deleteProject(env, r.id);
-  const left = (await env.DB.prepare('SELECT COUNT(*) AS n FROM projects WHERE owner_id = ?').bind(id).first()).n;
-  if (left) return { more: true, left };
+  if (!(await deleteAll(env, results.map(r => r.id), [], { n: BUDGET - 3 })) || results.length === 20) {
+    const left = (await env.DB.prepare('SELECT COUNT(*) AS n FROM projects WHERE owner_id = ?').bind(id).first()).n;
+    return { more: true, left };
+  }
   await env.DB.batch([
     env.DB.prepare('DELETE FROM folders WHERE owner_id = ?').bind(id),
     env.DB.prepare('DELETE FROM presets WHERE owner_id = ?').bind(id),
@@ -948,10 +985,14 @@ async function signup(req, env) {
   if (!b.password || String(b.password).length < 8) return fail('Use at least 8 characters for your password.');
   if (b.avatar && !AVATAR_RE.test(b.avatar)) return fail('That picture didn\'t work. Try another one.');
   const id = uid(), salt = uid();
-  const claimed = await env.DB.prepare('UPDATE invites SET used_by = ?, used_at = ? WHERE code = ? AND used_by IS NULL').bind(id, now(), code).run();
-  if (!claimed.meta.changes) return fail('That invite code was just used');
-  await env.DB.prepare("INSERT INTO users (id, username, pass_salt, pass_hash, is_admin, avatar, storage, session, created_at) VALUES (?, ?, ?, ?, 0, ?, 'drive', ?, ?)")
-    .bind(id, name, salt, await passHash(env, salt, String(b.password)), b.avatar || null, uid(), now()).run();
+  // One transaction: the account is made only if the code is still free, and the code is used only if the account was
+  // made (two people grabbing the same username can't burn the invite).
+  const [made] = await env.DB.batch([
+    env.DB.prepare("INSERT INTO users (id, username, display_name, pass_salt, pass_hash, is_admin, avatar, storage, session, created_at) SELECT ?, ?, ?, ?, ?, 0, ?, 'drive', ?, ? WHERE EXISTS (SELECT 1 FROM invites WHERE code = ? AND used_by IS NULL)")
+      .bind(id, name, cleanName(b.display_name, 40) || null, salt, await passHash(env, salt, String(b.password)), b.avatar || null, uid(), now(), code),
+    env.DB.prepare('UPDATE invites SET used_by = ?, used_at = ? WHERE code = ? AND used_by IS NULL').bind(id, now(), code),
+  ]).catch(e => { throw /UNIQUE/i.test(e.message) ? userError('That username is taken.') : e; });
+  if (!made.meta.changes) return fail('That invite code was just used');
   await clearFails(env, lockKey);
   return json({ ok: true }, 200, { 'set-cookie': await authCookie(env, await getUser(env, id)) });
 }
@@ -1143,12 +1184,12 @@ async function handleShare(req, env, url, ctx) {
     }
     const title = s.kind === 'project'
       ? await env.DB.prepare('SELECT name, cover FROM projects WHERE id = ?').bind(s.target_id).first()
-      : await env.DB.prepare('SELECT name, cover FROM tracks WHERE id = ?').bind(s.target_id).first();
+      : await env.DB.prepare("SELECT t.name, COALESCE(NULLIF(t.cover, ''), p.cover) AS cover FROM tracks t JOIN projects p ON p.id = t.project_id WHERE t.id = ?").bind(s.target_id).first(); // a track without its own cover shows its project's
     const tracks = (await shareTracks(env, s)).map(({ file_key, ...t }) => ({ ...t, ext: drive.isDriveKey(file_key) ? 'mp3' : ext(file_key) }));
     const viewer = await userFromCookie(req, env);
     const saved = viewer && await env.DB.prepare('SELECT 1 FROM saved_shares WHERE user_id = ? AND token = ?').bind(viewer.id, token).first();
     return json({ ...title, allow_download: !!s.allow_download, public: !!s.public, tracks, preview: PREVIEW_SECS,
-      viewer: viewer ? { username: viewer.username, avatar: viewer.avatar || null, mine: viewer.id === s.owner_id, saved: !!saved } : null }, 200, headers);
+      viewer: viewer ? { username: viewer.username, name: nameOf(viewer), avatar: viewer.avatar || null, mine: viewer.id === s.owner_id, saved: !!saved } : null }, 200, headers);
   }
   if (!(await shareAllowed(req, env, s))) return fail('Password needed', 401);
   const tracks = await shareTracks(env, s);
@@ -1176,7 +1217,7 @@ async function handleShare(req, env, url, ctx) {
   }
   if (action === 'cover') {
     const key = url.searchParams.get('k');
-    const p = s.kind === 'project' && (await env.DB.prepare('SELECT cover FROM projects WHERE id = ?').bind(s.target_id).first());
+    const p = await env.DB.prepare(s.kind === 'project' ? 'SELECT cover FROM projects WHERE id = ?' : 'SELECT p.cover FROM tracks t JOIN projects p ON p.id = t.project_id WHERE t.id = ?').bind(s.target_id).first();
     if (!key || !(p?.cover === key || tracks.some(t => t.cover === key))) return fail('Not found', 404);
     return coverFile(env, key, 'public', await owner());
   }
@@ -1184,7 +1225,7 @@ async function handleShare(req, env, url, ctx) {
     const b = await req.json().catch(() => ({}));
     const t = tracks.find(t => t.id === b.track_id);
     if (!t) return fail('Not found', 404);
-    const who = viewer ? viewer.username : String(b.name || '').trim().slice(0, 80) || 'Anonymous';
+    const who = viewer ? nameOf(viewer) : String(b.name || '').trim().slice(0, 80) || 'Anonymous';
     // One notification per listener per half hour, not one per track (nameless listeners on public links: one a day).
     const quiet = viewer || String(b.name || '').trim() ? 30 * 60e3 : DAY;
     const recent = await env.DB.prepare('SELECT 1 FROM listens WHERE share_token = ? AND listener_name = ? AND at > ? LIMIT 1').bind(token, who, now() - quiet).first();
@@ -1197,13 +1238,13 @@ async function handleShare(req, env, url, ctx) {
   if (action === 'comments') {
     const tid = url.searchParams.get('track');
     if (!tracks.some(t => t.id === tid)) return fail('Not found', 404);
-    return json((await env.DB.prepare('SELECT id, name, at, body, created_at FROM comments WHERE share_token = ? AND track_id = ? ORDER BY created_at').bind(token, tid).all()).results);
+    return json((await env.DB.prepare('SELECT c.id, COALESCE(x.display_name, x.username, c.name) AS name, c.at, c.body, c.created_at FROM comments c LEFT JOIN users x ON x.id = c.user_id WHERE c.share_token = ? AND c.track_id = ? ORDER BY c.created_at').bind(token, tid).all()).results);
   }
   if (action === 'comment' && req.method === 'POST') {
     const b = await req.json().catch(() => ({}));
     const t = tracks.find(t => t.id === b.track_id);
     if (!viewer && !s.public) return fail('Sign in to comment', 401);
-    const body = String(b.body || '').trim().slice(0, 1000), who = viewer ? viewer.username : String(b.name || '').trim().slice(0, 80) || 'Anonymous';
+    const body = String(b.body || '').trim().slice(0, 1000), who = viewer ? nameOf(viewer) : String(b.name || '').trim().slice(0, 80) || 'Anonymous';
     if (!t) return fail('Not found', 404);
     if (!body) return fail('Write something first');
     // ponytail: flood guard per link (30 per 10 min); add per-address limits if a link gets abused

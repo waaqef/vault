@@ -42,7 +42,7 @@ Open http://localhost:8787. The password is whatever is in `.dev.vars` (create t
 - **Sort and filter:** use the toolbar (Custom order, Newest, Name, BPM, Key, Length, tags). Set BPM, key and tags under a track's ⋯ → Details & versions. In Custom order, drag rows to reorder them, or drag a track onto a project in the sidebar to move it.
 - **Editor (⋯ → Edit audio):** you hear changes live. **Apply to file** writes them into the audio and saves it as a 24-bit WAV.
   - **Speed & pitch:** varispeed, tempo (keeps pitch), pitch (keeps tempo)
-  - **EQ:** parametric, up to 8 bands. Drag the dots; scroll over a dot to change its Q.
+  - **EQ:** parametric, up to 8 bands. Drag the dots (hold Shift for fine moves); scroll over a dot to change its Q, or use the dials under it.
   - **Dynamics:** compressor with a gain-reduction meter, limiter
   - **Gain & pan:** input and output gain, pan
   - **Waveform tools:** trim, cut, silence, fade in/out, normalize, reverse, mono, loop, undo
@@ -50,6 +50,7 @@ Open http://localhost:8787. The password is whatever is in `.dev.vars` (create t
 - **Versions:** every Apply keeps the previous file. Switch back, preview or delete old ones under Details & versions. Old versions count toward your 10 GB.
 - **Share links:** create a link from Share, with an optional password, expiry and downloads on or off. People signed in to [vault] hear full songs, can comment and can save it to their library; everyone else hears 5-second previews unless you make the link **Public**. The 🎧 count shows who played what. Turn a link off or delete it at any time.
 - **People:** in Share, add [vault] users by username as **Can listen** or **Can edit**. It shows up in their library under [shared with me] and plays in their app, offline too. Editors can add, remove, reorder and edit tracks (their files go into your storage); only you can delete or share the project. Comments and **Activity** (⋯ menu) show what everyone did.
+- **Names:** your username is unique: it's what you sign in with and what people add you by. Your display name (Settings → Account) is what everyone sees on comments, activity and shared projects.
 - **Offline:** use ⋯ → Save offline, or Save all offline on a project. Saved tracks play with no connection.
 - **Record:** captures an idea from the microphone into the current project.
 

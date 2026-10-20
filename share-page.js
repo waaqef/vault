@@ -54,14 +54,14 @@ ${exists ? `<audio id="a" controls hidden></audio>
 const token = location.pathname.split('/')[2], base = '/s/' + token, m = document.getElementById('m'), a = document.getElementById('a');
 const el = (t, p = {}, ...k) => { const e = document.createElement(t); Object.assign(e, p); e.append(...k); return e; };
 const fmt = s => s ? Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0') : '';
-const brand = () => el('a', { className: 'brand', href: '/login', textContent: '[vault]' });
+const brand = () => el('a', { className: 'brand', href: '/', textContent: '[vault]' });
 let name = ''; try { name = localStorage.getItem('listener') || ''; } catch {}
 async function open(password) {
   const r = await fetch(base + '/open', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password }) });
   const d = await r.json();
   if (r.status === 401) return ask(password ? d.error : '');
   if (!r.ok) { m.replaceChildren(brand(), el('h1', { textContent: 'Link not available' })); return; }
-  if (d.viewer) name = d.viewer.username;
+  if (d.viewer) name = d.viewer.name || d.viewer.username;
   show(d);
 }
 function ask(err) {
@@ -141,7 +141,7 @@ function show(d) {
     }
     const r = el('div', { className: 'row' + (d.allow_download ? ' has-dl' : '') }, ...kids);
     r.style.animationDelay = (0.1 + Math.min(i, 16) * 0.025) + 's';
-    r.onclick = () => play(i);
+    r.onclick = () => (cur === i ? (a.paused ? a.play() : a.pause()) : play(i)); // tapping the playing song pauses it (previews have no player bar)
     return r;
   });
 
@@ -191,7 +191,7 @@ function show(d) {
   function drawComments() {
     list.replaceChildren(...comments.slice().sort((x, y) => (x.at ?? 1e9) - (y.at ?? 1e9)).map(c => {
       const b = el('button', { className: 'ts', type: 'button', textContent: c.at == null ? '·' : clock(c.at) });
-      b.onclick = () => { if (c.at != null) { a.currentTime = c.at; a.play(); } };
+      b.onclick = () => { if (c.at == null) return; if (!full && c.at >= d.preview) return nudge(); a.currentTime = c.at; a.play(); };
       return el('div', { className: 'cm' }, b, el('div', {}, el('b', { textContent: c.name }), el('span', { textContent: ' ' + c.body })));
     }));
   }

@@ -12,6 +12,8 @@ const db = x => Math.pow(10, x / 20);
 const toDb = g => (g > 0 ? 20 * Math.log10(g) : -Infinity);
 const TYPES = { peaking: 'Bell', lowshelf: 'Low shelf', highshelf: 'High shelf', highpass: 'High-pass', lowpass: 'Low-pass', notch: 'Notch' };
 const HAS_GAIN = t => ['peaking', 'lowshelf', 'highshelf'].includes(t);
+const SHELF = t => t === 'lowshelf' || t === 'highshelf'; // Web Audio shelves have no Q
+const CUT = t => t === 'highpass' || t === 'lowpass';
 const fmt = s => `${Math.floor(s / 60)}:${(s % 60).toFixed(1).padStart(4, '0')}`;
 
 const defaults = () => ({
@@ -41,7 +43,8 @@ function makeChain(ctx, s) {
   c.input = c.inG; c.output = c.outG;
   return c;
 }
-function setBand(f, b) { f.type = b.type; f.frequency.value = b.freq; f.Q.value = b.q; f.gain.value = b.gain; return f; }
+// Web Audio reads a high/low-pass Q as dB of resonance; the dial uses the usual Q (0.71 = a clean slope, no bump), so it's converted.
+function setBand(f, b) { f.type = b.type; f.frequency.value = b.freq; f.Q.value = CUT(b.type) ? 20 * Math.log10(b.q) : b.q; f.gain.value = b.gain; return f; }
 function setComp(n, c) {
   n.threshold.value = c.threshold; n.ratio.value = c.ratio; n.knee.value = c.knee;
   n.attack.value = c.attack / 1000; n.release.value = c.release / 1000; return n;
@@ -103,9 +106,10 @@ export async function openEditor(track, app) {
   try { actx = new AudioContext({ sampleRate: PREFERRED_RATE }); } catch { actx = new AudioContext(); }
 
   let confirming = false; // the discard dialog is open
+  let closed = false; // closed (maybe before the track finished loading)
   let saved = false; // saved at least once this session (the player reloads the new version on close)
   let s = defaults(), buf, orig = null, ab = false, undo = [], ops = [], sel = null, loop = false, holdLoop = null;
-  let chain, src = null, shifter = null, playing = false, startAt = 0, offset = 0, raf = 0, busy = false;
+  let chain, src = null, shifter = null, playing = false, startAt = 0, offset = openAt, raf = 0, busy = false;
   let tab = 'adjust', adjustMode = 'varispeed', dynMode = 'comp', eqSel = 0, linked = true;
   // Linked = varispeed (tape): speed and pitch move together. Unlinked: Speed keeps the pitch, Pitch keeps the speed.
   const syncLinked = () => { linked = s.tempo === 1 && s.pitch === 0; };
@@ -272,7 +276,7 @@ export async function openEditor(track, app) {
   }
   function toggle() { if (!buf) return; playing ? (halt(), updatePlay()) : play(); }
   function updatePlay() { playBtn.replaceChildren(icon(playing ? 'pause' : 'play', 24)); playBtn.classList.toggle('on', playing); }
-  function seek(t) { offset = Math.max(0, Math.min(buf.duration, t)); if (playing) play(offset); }
+  function seek(t) { if (!buf) return; offset = Math.max(0, Math.min(buf.duration, t)); if (playing) play(offset); }
 
   // Hold to loop: repeats one bar (from the track's BPM, else 2 seconds) from where you pressed, while held.
   const holdStart = e => {
@@ -580,11 +584,10 @@ export async function openEditor(track, app) {
 
   // ---- EQ graph ----------------------------------------------------------------------
   const eqCanvas = h('canvas', { className: 'eq-canvas', 'aria-label': 'EQ curve. Drag the numbered dots.' });
-  const FMIN = 20, FMAX = 20000, DBR = 24;
+  const FMIN = 20, FMAX = 20000, DBR = 18; // the graph and the gain dials go to ±18 dB
   const fx = (f, W) => (Math.log10(f / FMIN) / Math.log10(FMAX / FMIN)) * W;
   const xf = (x, W) => FMIN * Math.pow(FMAX / FMIN, x / W);
   const gy = (g, H) => H / 2 - (g / DBR) * (H / 2);
-  const yg = (y, H) => ((H / 2 - y) / (H / 2)) * DBR;
   let grab = -1;
   function drawEq() {
     if (!eqCanvas.isConnected || !chain) return;
@@ -600,47 +603,96 @@ export async function openEditor(track, app) {
     g.strokeStyle = 'rgba(255,255,255,.06)'; g.lineWidth = 1; g.fillStyle = 'rgba(255,255,255,.3)';
     g.font = `${10 * dpr}px "Plex Mono", monospace`;
     for (const f of [50, 100, 200, 500, 1000, 2000, 5000, 10000]) { const x = fx(f, W); g.beginPath(); g.moveTo(x, 0); g.lineTo(x, H); g.stroke(); g.fillText(f >= 1000 ? f / 1000 + 'k' : f, x + 4 * dpr, H - 6 * dpr); }
-    for (const v of [-12, 0, 12]) { const y = gy(v, H); g.beginPath(); g.moveTo(0, y); g.lineTo(W, y); g.stroke(); }
-    const n = 256, freqs = new Float32Array(n), total = new Float32Array(n).fill(1), mag = new Float32Array(n), ph = new Float32Array(n);
+    g.textAlign = 'right';
+    for (const v of [-12, -6, 0, 6, 12]) {
+      const y = gy(v, H);
+      g.strokeStyle = v ? 'rgba(255,255,255,.06)' : 'rgba(255,255,255,.14)';
+      g.beginPath(); g.moveTo(0, y); g.lineTo(W, y); g.stroke();
+      if (v && Math.abs(v) === 12) g.fillText(sign(v), W - 4 * dpr, y - 3 * dpr);
+    }
+    g.textAlign = 'start';
+    const n = 256, freqs = new Float32Array(n), total = new Float32Array(n).fill(1), own = new Float32Array(n).fill(1), mag = new Float32Array(n), ph = new Float32Array(n);
     for (let i = 0; i < n; i++) freqs[i] = xf((i / (n - 1)) * W, W);
-    if (s.eqOn) for (const f of chain.eq) { f.getFrequencyResponse(freqs, mag, ph); for (let i = 0; i < n; i++) total[i] *= mag[i]; }
-    const pts = Array.from(freqs, (_, i) => [(i / (n - 1)) * W, gy(Math.max(-DBR, Math.min(DBR, toDb(total[i]))), H)]);
+    if (s.eqOn) chain.eq.forEach((f, j) => { f.getFrequencyResponse(freqs, mag, ph); for (let i = 0; i < n; i++) { total[i] *= mag[i]; if (j === eqSel) own[i] = mag[i]; } });
+    const yOf = m => gy(Math.max(-DBR, Math.min(DBR, toDb(m))), H);
+    if (s.eqOn && chain.eq[eqSel]) { // the picked band's own shape, faintly, so you can see what that dot does
+      g.beginPath(); g.moveTo(0, H / 2); own.forEach((m, i) => g.lineTo((i / (n - 1)) * W, yOf(m))); g.lineTo(W, H / 2); g.closePath();
+      g.globalAlpha = 0.2; g.fillStyle = HI; g.fill(); g.globalAlpha = 1;
+    }
+    const pts = Array.from(freqs, (_, i) => [(i / (n - 1)) * W, yOf(total[i])]);
     g.beginPath(); g.moveTo(0, H / 2); pts.forEach(([x, y]) => g.lineTo(x, y)); g.lineTo(W, H / 2); g.closePath();
     g.fillStyle = 'rgba(255,255,255,.07)'; g.fill();
     g.beginPath(); pts.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y)));
     g.strokeStyle = s.eqOn ? '#fff' : 'rgba(255,255,255,.3)'; g.lineWidth = 1.75 * dpr; g.stroke();
     g.textAlign = 'center'; g.textBaseline = 'middle';
     s.eq.forEach((b, i) => {
-      const x = fx(b.freq, W), y = gy(HAS_GAIN(b.type) ? b.gain : 0, H), on = i === eqSel;
+      const x = fx(b.freq, W), y = gy(HAS_GAIN(b.type) ? Math.max(-DBR, Math.min(DBR, b.gain)) : 0, H), on = i === eqSel;
       g.globalAlpha = s.eqOn ? 1 : 0.4;
       g.fillStyle = on ? HI : '#fff'; g.beginPath(); g.arc(x, y, (on ? 10 : 8) * dpr, 0, 7); g.fill();
       g.fillStyle = on ? '#fff' : '#191919'; g.fillText(String(i + 1), x, y + 0.5 * dpr);
     });
     g.globalAlpha = 1; g.textAlign = 'start'; g.textBaseline = 'alphabetic';
+    const b = s.eq[eqSel]; // what the picked band is set to, top left
+    if (b) {
+      g.font = `${11 * dpr}px "Plex Mono", monospace`; g.fillStyle = 'rgba(255,255,255,.7)';
+      g.fillText([`${eqSel + 1} ${TYPES[b.type]}`, fmtHz(b.freq), HAS_GAIN(b.type) && dbs(b.gain), !SHELF(b.type) && `Q ${b.q.toFixed(2)}`].filter(Boolean).join('  ·  '), 8 * dpr, 16 * dpr);
+    }
   }
   // EQ resets: the whole EQ back to flat, or one band back to how it started (the four starting bands, or a plain bell).
   function resetEq() { s.eq = defaults().eq; s.eqOn = true; eqSel = 0; haptic(); rebuild(); live(); renderPanel(); toast('EQ back to flat', { ms: 1500 }); }
   function resetBand(i) { if (!s.eq[i]) return; Object.assign(s.eq[i], defaults().eq[i] || { type: 'peaking', freq: 1000, gain: 0, q: 1 }); haptic(); live(); renderPanel(); }
-  let lastDot = { i: -1, t: 0 };
+  let lastDot = { i: -1, t: 0 }, drag = null;
   const eqPoint = e => { const r = eqCanvas.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top, r.width, r.height]; };
-  eqCanvas.addEventListener('pointerdown', e => {
+  const nearestDot = (e, reach) => {
     const [x, y, W, H] = eqPoint(e);
-    let best = 24; grab = -1;
-    s.eq.forEach((b, i) => { const dd = Math.hypot(fx(b.freq, W) - x, gy(HAS_GAIN(b.type) ? b.gain : 0, H) - y); if (dd < best) { best = dd; grab = i; } });
+    let best = reach, at = -1;
+    s.eq.forEach((b, i) => { const dd = Math.hypot(fx(b.freq, W) - x, gy(HAS_GAIN(b.type) ? Math.max(-DBR, Math.min(DBR, b.gain)) : 0, H) - y); if (dd < best) { best = dd; at = i; } });
+    return at;
+  };
+  // A dot moves from where it is (it doesn't jump to your finger), and calmly: on a phone it moves 60% as far as your
+  // finger, and Shift on a computer is finer still. Each direction only starts once you clearly push that way, so
+  // raising a band doesn't nudge its frequency too. Gain clicks into 0 dB on the way past.
+  const dragRate = e => (touch ? 0.6 : 1) * (e.shiftKey ? 0.25 : 1);
+  eqCanvas.addEventListener('pointerdown', e => {
+    grab = nearestDot(e, touch ? 36 : 24);
     if (grab >= 0 && lastDot.i === grab && performance.now() - lastDot.t < 350) { resetBand(grab); lastDot = { i: -1, t: 0 }; grab = -1; return; } // double-tap a dot
-    if (grab >= 0) { lastDot = { i: grab, t: performance.now() }; eqCanvas.setPointerCapture(e.pointerId); e.preventDefault(); if (eqSel !== grab) { eqSel = grab; renderPanel(); } }
+    if (grab < 0) return;
+    lastDot = { i: grab, t: performance.now() };
+    e.preventDefault();
+    if (eqSel !== grab) { eqSel = grab; renderPanel(); } // before capturing: redrawing the panel would drop the capture
+    const b = s.eq[grab];
+    drag = { x: e.clientX, y: e.clientY, freq: b.freq, gain: b.gain, k: dragRate(e), ax: false, ay: false };
+    eqCanvas.setPointerCapture(e.pointerId);
   });
   eqCanvas.addEventListener('pointermove', e => {
-    if (grab < 0) return;
-    const [x, y, W, H] = eqPoint(e), b = s.eq[grab];
-    b.freq = Math.round(Math.max(FMIN, Math.min(FMAX, xf(x, W))));
-    if (HAS_GAIN(b.type)) b.gain = Math.round(Math.max(-DBR, Math.min(DBR, yg(y, H))) * 10) / 10;
-    live();
+    if (grab < 0 || !drag) return;
+    const r = eqCanvas.getBoundingClientRect(), b = s.eq[grab], k = dragRate(e);
+    if (k !== drag.k) Object.assign(drag, { x: e.clientX, y: e.clientY, freq: b.freq, gain: b.gain, k }); // Shift pressed mid-drag: carry on from here
+    if (!drag.ax && Math.abs(e.clientX - drag.x) > 6) { drag.ax = true; drag.x += Math.sign(e.clientX - drag.x) * 6; }
+    if (!drag.ay && Math.abs(e.clientY - drag.y) > 6) { drag.ay = true; drag.y += Math.sign(e.clientY - drag.y) * 6; }
+    if (drag.ax) b.freq = Math.round(Math.max(FMIN, Math.min(FMAX, drag.freq * Math.pow(FMAX / FMIN, ((e.clientX - drag.x) * k) / r.width))));
+    if (drag.ay && HAS_GAIN(b.type)) {
+      const raw = drag.gain - ((e.clientY - drag.y) * k * 2 * DBR) / r.height;
+      const g = Math.abs(raw) < 0.6 ? 0 : Math.round(Math.max(-DBR, Math.min(DBR, raw)) * 10) / 10;
+      if ((g === 0) !== (b.gain === 0)) haptic(true);
+      b.gain = g;
+    }
+    live(); painters.forEach(p => p());
   });
-  eqCanvas.addEventListener('pointerup', () => { if (grab >= 0) renderPanel(); grab = -1; });
+  const endDrag = () => { grab = -1; drag = null; };
+  eqCanvas.addEventListener('pointerup', endDrag); eqCanvas.addEventListener('pointercancel', endDrag);
+  // Scroll over a dot (or anywhere, for the picked band) to change its Q.
+  eqCanvas.addEventListener('wheel', e => {
+    const at = nearestDot(e, 40), i = at >= 0 ? at : eqSel, b = s.eq[i];
+    if (!b || SHELF(b.type)) return;
+    e.preventDefault();
+    b.q = +Math.max(0.1, Math.min(18, b.q * Math.exp(-Math.sign(e.deltaY) * (e.shiftKey ? 0.02 : 0.08)))).toPrecision(3);
+    if (eqSel !== i) { eqSel = i; renderPanel(); }
+    live(); painters.forEach(p => p());
+  }, { passive: false });
 
   // ---- panels (one per tab) ----------------------------------------------------------
-  let grBar = null, pkBar = null, grText = null, pkText = null;
+  let grBar = null, pkBar = null, grText = null, pkText = null, shownPanel = '';
   const meter = (label, bar, text) => h('div', { className: 'meters' }, label, h('div', { className: 'bar' + (label === '[gr]' ? ' gr' : '') }, bar), text);
   function renderPanel() {
     tabs.querySelectorAll('[role=tab]').forEach(b => { const on = b.dataset.tab === tab; b.classList.toggle('on', on); b.setAttribute('aria-selected', on); });
@@ -675,12 +727,12 @@ export async function openEditor(track, app) {
           power(s.eqOn, () => { s.eqOn = !s.eqOn; })),
         eqCanvas,
         b && h('div', { className: 'ed-modes scroll' },
-          Object.entries(TYPES).map(([v, l]) => h('button', { className: 'mode' + (b.type === v ? ' on' : ''), onclick: () => { b.type = v; live(); renderPanel(); } }, l)),
+          Object.entries(TYPES).map(([v, l]) => h('button', { className: 'mode' + (b.type === v ? ' on' : ''), onclick: () => { if (CUT(v) !== CUT(b.type)) b.q = CUT(v) ? 0.71 : 1; b.type = v; live(); renderPanel(); } }, l)),
           h('button', { className: 'mode', title: 'This band back to flat (or double-tap its dot)', onclick: () => resetBand(eqSel) }, 'Reset band'),
           s.eq.length > 1 && h('button', { className: 'mode', 'aria-label': `Remove band ${eqSel + 1}`, onclick: () => { s.eq.splice(eqSel, 1); eqSel = Math.max(0, eqSel - 1); rebuild(); renderPanel(); } }, icon('trash', 14))),
         b && ruler('Freq', 0, 1, 0.001, () => Math.log(b.freq / 20) / Math.log(1000), v => { b.freq = Math.round(20 * Math.pow(1000, v)); }, () => fmtHz(b.freq), Math.log(1000 / 20) / Math.log(1000), 420),
-        b && HAS_GAIN(b.type) && ruler('Gain', -24, 24, 0.1, () => b.gain, v => { b.gain = v; }, dbs, 0, 360),
-        b && ruler('Q', 0.1, 18, 0.05, () => b.q, v => { b.q = v; }, v => v.toFixed(2), 1, 420),
+        b && HAS_GAIN(b.type) && ruler('Gain', -DBR, DBR, 0.1, () => b.gain, v => { b.gain = v; }, dbs, 0, 360),
+        b && !SHELF(b.type) && ruler('Q', 0, 1, 0.001, () => Math.log(b.q / 0.1) / Math.log(180), v => { b.q = +(0.1 * Math.pow(180, v)).toPrecision(3); }, () => b.q.toFixed(2), Math.log((CUT(b.type) ? 0.71 : 1) / 0.1) / Math.log(180), 420),
       ];
     } else if (tab === 'dyn') {
       grText = h('span', { className: 'num' }, '0.0'); pkText = h('span', { className: 'num' }, '–∞');
@@ -721,7 +773,9 @@ export async function openEditor(track, app) {
       ];
     }
     fill(panel, content);
-    panel.classList.remove('swap'); void panel.offsetWidth; panel.classList.add('swap');
+    const shown = [tab, adjustMode, dynMode, linked].join();
+    panel.classList.toggle('still', shown === shownPanel);
+    if (shown !== shownPanel) { shownPanel = shown; panel.classList.remove('swap'); void panel.offsetWidth; panel.classList.add('swap'); }
     if (tab === 'eq') requestAnimationFrame(drawEq);
   }
   const fill = (el, kids) => el.replaceChildren(...kids.flat(9).filter(k => k != null && k !== false));
@@ -852,7 +906,8 @@ export async function openEditor(track, app) {
       if (!ok) return;
     }
     if (ab) toggleAB(false);
-    const back = { at: playing ? pos() : offset, playing: resume ?? playing, saved };
+    closed = true;
+    const back = { at: playing ? pos() : offset, playing: resume ?? (buf ? playing : autoplay), saved }; // closed while loading: carry on as before
     halt(); cancelAnimationFrame(raf); removeEventListener('keydown', onKey);
     actx.close().catch(() => {});
     document.removeEventListener('visibilitychange', onVis);
@@ -866,9 +921,11 @@ export async function openEditor(track, app) {
   try {
     buf = orig = await actx.decodeAudioData(await (await audioBlob(track)).arrayBuffer());
   } catch (e) {
+    if (closed) return;
     oops(new Error(`Couldn't open ${track.name} for editing. This browser may not support the format.`));
     return close(true);
   }
+  if (closed) return; // closed before it finished loading
   chain = makeChain(actx, s); chain.output.connect(analyser);
   offset = Math.min(openAt, Math.max(0, buf.duration - 0.05));
   drawPeaks(); renderPanel(); loadPresets(); tick();

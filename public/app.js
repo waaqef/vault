@@ -94,9 +94,9 @@ function dialog(content, { className = '', locked = false } = {}) {
   if (matchMedia('(pointer: coarse)').matches && /INPUT|TEXTAREA/.test(document.activeElement?.tagName)) { document.activeElement.blur(); d.focus?.(); }
   return d;
 }
-function prompt(title, value = '', { label = 'Name', ok = 'Save' } = {}) {
+function prompt(title, value = '', { label = 'Name', ok = 'Save', optional = false, max = 200 } = {}) {
   return new Promise(res => {
-    const input = h('input', { type: 'text', value, required: true, maxLength: 200 });
+    const input = h('input', { type: 'text', value, required: !optional, maxLength: max });
     const d = dialog(h('form', { method: 'dialog', onsubmit: e => { e.preventDefault(); res(input.value.trim()); d.close(); } },
       h('h2', {}, title), h('label', {}, label, input),
       h('div', { className: 'btns' }, h('button', { type: 'button', className: 'btn ghost', onclick: () => d.close() }, 'Cancel'), h('button', { className: 'btn primary' }, ok))));
@@ -144,7 +144,7 @@ function applyTree(d) {
   S.sharedProjects = [...sh.projects, ...sh.singles.map(t => ({ id: 'track:' + t.id, name: t.name, cover: t.cover || t.project_cover, owner: t.owner, role: 'viewer', single: t.id, created_at: t.created_at }))];
   S.sharedTracks = [...sh.tracks, ...sh.singles.map(({ owner, project_cover, ...t }) => ({ ...t, project_id: 'track:' + t.id }))];
 }
-const setView = v => { S.view = v; S.arrange = false; S.select = null; store.set('view', v); document.body.classList.remove('side-open'); render(); };
+const setView = v => { S.view = v; S.arrange = false; S.select = null; S.homeAll = false; store.set('view', v); document.body.classList.remove('side-open'); render(); };
 
 // Opened from a share page's "Sign in" / "Sign up": go back there once signed in. Only share links are allowed.
 try {
@@ -159,7 +159,7 @@ async function load() {
     const d = await api('/tree');
     applyTree(d); S.online = true;
     store.set('tree', d);
-    if (d.me?.needsDrive) return driveStep();
+    if (d.me?.needsDrive) { driveBack(); return driveStep(); } // say why connecting didn't work, if it didn't
     $('#login')?.closest('dialog')?.close(); // e.g. Drive was just connected in Safari
     const next = takeNext();
     if (next) return location.replace(next);
@@ -170,15 +170,21 @@ async function load() {
     if (e.message === 'Not logged in') return;
     const d = store.get('tree');
     if (d) applyTree(d);
-    S.online = false;
-    toast("You're offline. Showing your saved library.");
+    // no connection: play what's saved. Anything else is a real error, so say what it was.
+    S.online = !(e instanceof TypeError);
+    toast(S.online ? `Couldn't load your library: ${e.message}` : "You're offline. Showing your saved library.", { error: S.online, ms: S.online ? 8000 : 3500 });
   }
   if (S.view.type === 'project' && !projectOf(S.view.id)) S.view = { type: 'all' };
   render();
-  const back = new URLSearchParams(location.search).get('drive');
-  if (back) { history.replaceState(null, '', '/library'); toast(back === 'connected' ? 'Google Drive connected' : back, { error: back !== 'connected', ms: 6000 }); }
+  driveBack();
   const deep = new URLSearchParams(location.search).get('track');
   if (deep) { history.replaceState(null, '', '/library'); if (trackOf(deep)) (canEdit(trackOf(deep).project_id) ? detailsDialog : commentsDialog)(trackOf(deep)); }
+}
+
+// Back from connecting Google Drive: ?drive=connected, or what went wrong.
+function driveBack() {
+  const back = new URLSearchParams(location.search).get('drive');
+  if (back) { history.replaceState(null, '', '/library'); toast(back === 'connected' ? 'Google Drive connected' : back, { error: back !== 'connected', ms: 6000 }); }
 }
 
 function showLogin() {
@@ -200,14 +206,14 @@ function showLogin() {
 
   // Sign in: username + password, or just the admin password.
   function signIn() {
-    const user = field('text', 'username', { placeholder: 'leave empty for admin' }), pw = field('password', 'current-password', { required: true });
+    const user = field('text', 'username'), pw = field('password', 'current-password', { required: true });
     fill(box, head, h('div', { className: 'brandmark' }, '[vault]'), form(async () => {
       await api('/login', { method: 'POST', body: { username: user.value.trim(), password: pw.value } });
       history.replaceState(null, '', '/library' + location.search); // signed in: the address becomes the library
       d.close(); load();
     }, h('label', {}, '[username]', user), h('label', {}, '[password]', pw), err(), h('button', { className: 'btn primary', style: big }, 'Sign in')),
     link('Have an invite code? Sign up', signUp),
-    h('small', { className: 'login-links' }, h('a', { href: '/about' }, 'About'), h('a', { href: '/privacy' }, 'Privacy'), h('a', { href: '/terms' }, 'Terms')));
+    h('small', { className: 'login-links' }, h('a', { href: '/' }, 'About'), h('a', { href: '/privacy' }, 'Privacy'), h('a', { href: '/terms' }, 'Terms')));
   }
   // Sign up, step 1: the invite code.
   function signUp() {
@@ -240,14 +246,15 @@ function showLogin() {
       if (!file) return;
       try { avatar = await avatarData(file); paintAvatar(pic, avatar); } catch (e) { oops(e); }
     } }, icon('plus', 20));
+    const shown = field('text', 'name', { maxLength: 40, placeholder: 'e.g. Maya Lee', autocapitalize: 'words' });
     const user = field('text', 'username', { required: true, minLength: 3, maxLength: 24, pattern: '[A-Za-z0-9._\\-]+', placeholder: 'letters, numbers, . _ -' });
     const pw = field('password', 'new-password', { required: true, minLength: 8 }), again = field('password', 'new-password', { required: true });
     fill(box, h('div', { className: 'brandmark' }, '[your account]'), form(async () => {
       if (pw.value !== again.value) throw new Error("The passwords don't match.");
-      await api('/signup', { method: 'POST', body: { invite, username: user.value.trim(), password: pw.value, avatar } });
+      await api('/signup', { method: 'POST', body: { invite, username: user.value.trim(), display_name: shown.value.trim(), password: pw.value, avatar } });
       driveStep(box, d);
     }, pic, h('small', { className: 'muted' }, 'Profile picture (optional)'),
-    h('label', {}, '[username]', user), h('label', {}, '[password] 8+ characters', pw), h('label', {}, '[password again]', again), err(),
+    h('label', {}, '[name] what people see (optional)', shown), h('label', {}, '[username] unique, for signing in', user), h('label', {}, '[password] 8+ characters', pw), h('label', {}, '[password again]', again), err(),
     h('button', { className: 'btn primary', style: big }, 'Create account')),
     link('Back', signUp));
   }
@@ -274,11 +281,13 @@ function paintAvatar(el, src, name = '') {
   el.style.backgroundImage = src ? `url("${src}")` : '';
   fill(el, src ? '' : (name[0] || '?').toUpperCase());
 }
-const avatarEl = (me, cls = 'avatar') => { const a = h('span', { className: cls }); paintAvatar(a, me?.avatar, me?.username); return a; };
+// What people see: the display name, or the username for accounts without one.
+const nameOf = u => u?.displayName || u?.display_name || u?.username || '';
+const avatarEl = (me, cls = 'avatar') => { const a = h('span', { className: cls }); paintAvatar(a, me?.avatar, nameOf(me)); return a; };
 // Logging out also forgets this account's songs kept on the device, so the next person doesn't get them.
 async function logout() {
   await fetch('/api/logout').catch(() => {});
-  try { localStorage.removeItem('tree'); localStorage.removeItem('offline'); localStorage.removeItem('view'); } catch {}
+  try { ['tree', 'offline', 'view', 'played', 'recent'].forEach(k => localStorage.removeItem(k)); } catch {}
   await Promise.all(['audio', 'played'].map(c => caches.delete(c).catch(() => {})));
   location.replace('/login');
 }
@@ -327,7 +336,7 @@ function renderSide() {
     h('div', { className: 'brand' }, h('button', { className: 'brand-home', 'aria-label': 'Home', title: 'Home', onclick: () => setView({ type: 'home' }) }, '[vault]'), !S.online && h('span', { className: 'mono' }, '[offline]'),
       S.me && h('button', { className: 'icon-btn sm bell', 'aria-label': S.unread ? `Inbox, ${S.unread} new` : 'Inbox', title: 'Inbox', onclick: inboxDialog },
         icon('bell', 17), S.unread > 0 && h('span', { className: 'bell-n num' }, S.unread > 9 ? '9+' : S.unread)),
-      S.me && h('button', { className: 'me', title: `Signed in as ${S.me.username}`, 'aria-label': `Account: ${S.me.username}`, onclick: () => settingsDialog('account') }, avatarEl(S.me))),
+      S.me && h('button', { className: 'me', title: `Signed in as ${nameOf(S.me)} (@${S.me.username})`, 'aria-label': `Account: ${nameOf(S.me)}`, onclick: () => settingsDialog('account') }, avatarEl(S.me))),
     navItem('home', 'Home', '', 'home'),
     navItem('all', 'All tracks', S.tracks.length, 'music'),
     navItem('starred', 'Starred', S.tracks.filter(t => t.mark === 'star').length, 'star'),
@@ -902,10 +911,15 @@ addEventListener('click', e => { if (suppressClick) { e.stopPropagation(); e.pre
 addEventListener('touchmove', e => { if (dragging) e.preventDefault(); }, { passive: false });
 addEventListener('contextmenu', e => { if (dragging || sideDrag) e.preventDefault(); });
 
+// `ids` are the tracks on screen in their new order. While a search or filter hides some, the shown ones swap
+// between the places they already had and the hidden ones stay put.
 async function reorder(ids) {
-  ids.forEach((id, i) => { trackOf(id).position = i; });
+  const pid = trackOf(ids[0])?.project_id, shown = new Set(ids), next = [...ids];
+  const all = [...S.tracks, ...S.sharedTracks].filter(t => t.project_id === pid).sort((a, b) => a.position - b.position || a.created_at - b.created_at);
+  const full = all.map(t => (shown.has(t.id) ? next.shift() : t.id));
+  full.forEach((id, i) => { trackOf(id).position = i; });
   renderList();
-  await api('/tracks/reorder', { method: 'POST', body: { ids } }).catch(oops);
+  await api('/tracks/reorder', { method: 'POST', body: { ids: full } }).catch(oops);
 }
 
 // ---- folders & projects --------------------------------------------------------------
@@ -1018,7 +1032,7 @@ function projectMenu(p) {
     { icon: 'trash', label: 'Move to trash', danger: true, async run() {
       const n = tracks().length;
       if (!(await confirm(`Move “${p.name}” to the trash?`, `You can restore the project and its ${n} ${n === 1 ? 'track' : 'tracks'} from Recently deleted for 30 days.`, 'Move to trash'))) return;
-      await api(`/projects/${p.id}`, { method: 'DELETE' }).catch(oops);
+      if (!(await api(`/projects/${p.id}`, { method: 'DELETE' }).then(() => true, oops))) return;
       setView({ type: 'all' }); load();
       toast(`Moved “${p.name}” to the trash`, { ms: 7000, action: { label: 'Undo', run: () => restore('project', p.id) } });
     } },
@@ -1153,7 +1167,7 @@ async function pump() {
     } catch (e) {
       job.status = e.message === 'Cancelled' ? 'cancelled' : 'failed';
       job.error = e.message; job.loaded = 0;
-      if (/Storage full/.test(e.message)) Q.jobs.forEach(j => { if (j.status === 'queued') { j.status = 'failed'; j.error = 'Storage full'; j.done(); } });
+      if (/Storage full|Drive is full/.test(e.message)) Q.jobs.forEach(j => { if (j.status === 'queued') { j.status = 'failed'; j.error = 'Storage full'; j.done(); } });
     }
     job.done(); drawQueue();
   }
@@ -1409,7 +1423,7 @@ function trackMenu(t, list) {
     ed && manual && i < list.length - 1 && { icon: 'down', label: 'Move down', run: () => move(1) },
     ed && '-',
     ed && { icon: 'trash', label: 'Move to trash', danger: true, async run() {
-      await api(`/tracks/${t.id}`, { method: 'DELETE' }).catch(oops);
+      if (!(await api(`/tracks/${t.id}`, { method: 'DELETE' }).then(() => true, oops))) return;
       load();
       toast(`Moved “${t.name}” to the trash`, { ms: 7000, action: { label: 'Undo', run: () => restore('track', t.id) } });
     } },
@@ -1469,14 +1483,16 @@ async function activityDialog(p) {
   const d = dialog(h('div', { className: 'stack' }, h('h2', {}, `Activity · ${p.name}`), list,
     h('div', { className: 'btns' }, h('button', { className: 'btn primary', onclick: () => d.close() }, 'Done'))));
   const rows = await api(`/projects/${p.id}/activity`).catch(e => (oops(e), []));
-  fill(list, rows.length ? rows.map(r => h('div', { className: 'item' }, avatarEl({ avatar: r.avatar, username: r.username || '?' }),
-    h('span', { className: 'grow' }, h('b', {}, r.username || 'Someone'), ' ', r.text, h('div', { className: 'mono', style: { color: 'var(--fg-3)', fontSize: '11px' } }, fmtDate(r.created_at)))))
+  fill(list, rows.length ? rows.map(r => h('div', { className: 'item' }, avatarEl(r),
+    h('span', { className: 'grow' }, h('b', {}, nameOf(r) || 'Someone'), ' ', r.text, h('div', { className: 'mono', style: { color: 'var(--fg-3)', fontSize: '11px' } }, fmtDate(r.created_at)))))
     : h('div', { className: 'muted' }, 'Nothing yet. Changes made by you and the people on this project show up here.'));
 }
 
 // Detects BPM & key for existing tracks. overwrite=false only fills in what's missing.
 // Decodes once and returns the waveform, plus BPM & key when detect is on.
 async function analyse(blob, name, detect = true) {
+  // ponytail: over 200 MB isn't decoded (that much audio in memory can crash a phone); BPM/key come from the name, no waveform
+  if (blob.size > 200e6) return detect ? parseName(name) : {};
   try {
     const buf = await decodeAudio(blob);
     return { ...(detect ? bpmKeyOf(buf, name) : {}), peaks: peaksOf(buf) };
@@ -1488,7 +1504,7 @@ async function analyse(blob, name, detect = true) {
 // Tracks without a waveform (older uploads, the iPhone Shortcut, switched versions) get one the first time they play.
 const peaking = new Set();
 async function fillPeaks(t) {
-  if (t.peaks || peaking.has(t.id) || !S.online || t.size > 300e6 || !canEdit(t.project_id)) return; // listen-only: don't write to someone else's track
+  if (t.peaks || peaking.has(t.id) || !S.online || t.size > 200e6 || !canEdit(t.project_id)) return; // listen-only: don't write to someone else's track
   peaking.add(t.id);
   try {
     const { peaks } = await analyse(await audioBlob(t), t.name, false);
@@ -1537,17 +1553,20 @@ async function detailsDialog(t) {
   const bpm = h('input', { type: 'number', min: 20, max: 400, step: 0.1, value: t.bpm ?? '', placeholder: '—' });
   const key = h('select', {}, h('option', { value: '' }, '—'), KEYS.map(k => h('option', { value: k, selected: t.musical_key === k }, k)));
   const tags = h('input', { type: 'text', value: t.tags || '', placeholder: 'dark, trap, sent to Mike' });
-  const proj = h('select', {}, S.projects.map(p => h('option', { value: p.id, selected: p.id === t.project_id }, p.name)));
+  const own = !isShared(t.project_id); // a shared track stays in its project
+  const proj = own && h('select', {}, S.projects.map(p => h('option', { value: p.id, selected: p.id === t.project_id }, p.name)));
   const notes = h('textarea', { rows: 5, value: t.notes || '', placeholder: 'Lyrics, ideas, who you sent it to…', maxLength: 20000 });
   const versions = h('div', { className: 'list' }, h('div', { className: 'muted' }, 'Loading…'));
   const comments = h('div', { className: 'list comments' }, h('div', { className: 'muted' }, 'Loading…'));
   const d = dialog(h('form', {
     async onsubmit(e) {
       e.preventDefault();
-      await api(`/tracks/${t.id}`, { method: 'PATCH', body: {
-        name: name.value.trim(), artist: artist.value.trim(), bpm: bpm.value ? +bpm.value : null, musical_key: key.value || null,
-        tags: tags.value.split(',').map(s => s.trim()).filter(Boolean).join(', '), project_id: proj.value, notes: notes.value,
-      } }).catch(oops);
+      try {
+        await api(`/tracks/${t.id}`, { method: 'PATCH', body: {
+          name: name.value.trim(), artist: artist.value.trim(), bpm: bpm.value ? +bpm.value : null, musical_key: key.value || null,
+          tags: tags.value.split(',').map(s => s.trim()).filter(Boolean).join(', '), notes: notes.value, ...(own ? { project_id: proj.value } : {}),
+        } });
+      } catch (x) { return oops(x); }
       d.close(); load();
     },
   },
@@ -1556,12 +1575,12 @@ async function detailsDialog(t) {
   h('label', {}, 'Producer / artist', artist),
   h('div', { className: 'row2' }, h('label', {}, 'BPM', bpm), h('label', {}, 'Key', key)),
   h('label', {}, 'Tags (comma separated)', tags),
-  h('label', {}, 'Project', proj),
+  own && h('label', {}, 'Project', proj),
   h('label', {}, 'Notes', notes),
   h('div', { className: 'btns', style: { justifyContent: 'flex-start' } },
     h('button', { type: 'button', className: 'btn', onclick: () => { d.close(); setCover('tracks', t); } }, t.cover ? 'Change cover' : 'Add cover'),
     t.cover && h('button', { type: 'button', className: 'btn ghost', onclick: () => { d.close(); api(`/tracks/${t.id}`, { method: 'PATCH', body: { cover: null } }).then(load, oops); } }, 'Remove cover')),
-  h('div', { className: 'field' }, h('span', { className: 'field-l' }, 'Comments from share links'), comments),
+  h('div', { className: 'field' }, h('span', { className: 'field-l' }, 'Comments'), comments),
   h('div', { className: 'field' }, h('span', { className: 'field-l' }, 'Versions'), versions), // not a <label>: that would click the first button inside
   h('div', { className: 'btns' }, h('button', { type: 'button', className: 'btn ghost', onclick: () => d.close() }, 'Cancel'), h('button', { className: 'btn primary' }, 'Save'))));
 
@@ -1574,7 +1593,7 @@ async function detailsDialog(t) {
       await api(`/comments/${cm.id}`, { method: 'DELETE' }).catch(oops);
       this.closest('.comment').remove();
       if (S.comments[t.id]) S.comments[t.id]--;
-    } }, icon('trash', 15)))) : h('div', { className: 'muted' }, 'None yet. People can comment at a moment in the track from any share link.')), oops);
+    } }, icon('trash', 15)))) : h('div', { className: 'muted' }, 'None yet. People on the project and anyone with a share link can comment at a moment in the track.')), oops);
 
   // Versions: switching or deleting one keeps this open and redraws the list.
   let inUse = t.file_key, preview = null;
@@ -1820,7 +1839,7 @@ function cycleRepeat() {
 // Tracks sent from the iPhone Shortcut arrive without a length; save it the first time one plays.
 audio.addEventListener('loadedmetadata', () => {
   if (!realSrc()) return;
-  if (cur && !cur.duration && isFinite(audio.duration)) { cur.duration = audio.duration; api(`/tracks/${cur.id}`, { method: 'PATCH', body: { duration: audio.duration } }).catch(() => {}); }
+  if (cur && !cur.duration && isFinite(audio.duration)) { cur.duration = audio.duration; if (canEdit(cur.project_id)) api(`/tracks/${cur.id}`, { method: 'PATCH', body: { duration: audio.duration } }).catch(() => {}); }
   if (cur && !cur.peaks && (isOffline(cur) || settings.keepPlayed)) setTimeout(fillPeaks, 1500, cur); // drawn from the copy on this device (free)
 });
 // Play a track from a moment (comment timestamps).
@@ -2155,7 +2174,7 @@ async function shareDialog(kind, target_id, name) {
   h('div', { className: 'set-row' }, h('div', { className: 't' }, 'Allow downloads', h('small', {}, 'For signed-in [vault] users. Changeable per link.')), dl),
   h('div', { className: 'set-row' }, h('div', { className: 't' }, 'Public link', h('small', {}, 'Full songs for anyone with the link. Off: previews unless signed in.')), pub),
   h('div', { className: 'btns', style: { justifyContent: 'flex-start' } }, h('button', { className: 'btn primary' }, 'Create link')),
-  h('label', {}, 'Links · downloads · public · who listened', list),
+  h('div', { className: 'field' }, h('span', { className: 'field-l' }, 'Links · downloads · public · who listened'), list),
   kind === 'project' && peopleSection(target_id),
   h('div', { className: 'btns' }, h('button', { type: 'button', className: 'btn ghost', onclick: () => d.close() }, 'Done'))));
   refresh();
@@ -2166,12 +2185,12 @@ function peopleSection(projectId) {
   const list = h('div', { className: 'list' });
   const name = h('input', { type: 'text', placeholder: 'Username', autocapitalize: 'none', spellcheck: false, 'aria-label': 'Username' });
   const role = h('select', { 'aria-label': 'Permission' }, h('option', { value: 'viewer' }, 'Can listen'), h('option', { value: 'editor' }, 'Can edit'));
-  const roleSel = m => h('select', { 'aria-label': `${m.username}'s permission`, onchange() { api(`/projects/${projectId}/members`, { method: 'POST', body: { username: m.username, role: this.value } }).then(draw, oops); } },
+  const roleSel = m => h('select', { 'aria-label': `${nameOf(m)}'s permission`, onchange() { api(`/projects/${projectId}/members`, { method: 'POST', body: { username: m.username, role: this.value } }).then(draw, oops); } },
     h('option', { value: 'viewer', selected: m.role === 'viewer' }, 'Can listen'), h('option', { value: 'editor', selected: m.role === 'editor' }, 'Can edit'));
   async function draw() {
     const people = await api(`/projects/${projectId}/members`).catch(e => (oops(e), []));
-    fill(list, people.length ? people.map(m => h('div', { className: 'item' }, avatarEl(m), h('span', { className: 'grow' }, m.username), roleSel(m),
-      h('button', { type: 'button', className: 'icon-btn sm', 'aria-label': `Remove ${m.username}`, onclick: () => api(`/projects/${projectId}/members/${m.id}`, { method: 'DELETE' }).then(draw, oops) }, icon('close', 14))))
+    fill(list, people.length ? people.map(m => h('div', { className: 'item' }, avatarEl(m), h('span', { className: 'grow' }, nameOf(m), m.display_name && h('small', { className: 'muted' }, ` @${m.username}`)), roleSel(m),
+      h('button', { type: 'button', className: 'icon-btn sm', 'aria-label': `Remove ${nameOf(m)}`, onclick: () => api(`/projects/${projectId}/members/${m.id}`, { method: 'DELETE' }).then(draw, oops) }, icon('close', 14))))
       : h('div', { className: 'muted' }, 'Only you so far.'));
   }
   async function add() {
@@ -2180,7 +2199,7 @@ function peopleSection(projectId) {
   }
   name.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); add(); } };
   draw();
-  return h('label', {}, 'People with access', h('div', { className: 'people-add' }, name, role, h('button', { type: 'button', className: 'btn', onclick: add }, 'Add')), list,
+  return h('div', { className: 'field' }, h('span', { className: 'field-l' }, 'People with access'), h('div', { className: 'people-add' }, name, role, h('button', { type: 'button', className: 'btn', onclick: add }, 'Add')), list,
     h('small', { className: 'people-note' }, 'It shows up in their library under [shared with me]. Editors can add, remove, reorder and edit tracks; only you can delete the project or share it.'));
 }
 
@@ -2243,13 +2262,15 @@ async function recordDialog() {
     const file = new File(chunks, `${name.value.trim() || 'Idea'}.${ext}`, { type: mime.split(';')[0] });
     const duration = (Date.now() - started) / 1000;
     d.close();
+    let note;
     try {
       const pid = await targetProject();
-      const t = toast('Saving recording…', { ms: 0 });
+      note = toast('Saving recording…', { ms: 0 });
       const file_key = await uploadFile(file, undefined, pid);
       await api('/tracks', { method: 'POST', body: { project_id: pid, name: baseName(file.name), file_key, duration } });
-      t.remove(); toast('Recording saved'); load();
+      toast('Recording saved'); load();
     } catch (e) { oops(e); }
+    note?.remove();
   };
   d.addEventListener('close', () => { if (rec.state === 'recording') { rec.onstop = null; rec.stop(); } clearInterval(timer); stream.getTracks().forEach(t => t.stop()); });
 }
@@ -2320,18 +2341,24 @@ async function settingsDialog(only) {
     !nativeHaptics && h('div', { className: 'set-sec' }, h('h3', {}, '[iphone web app]'),
       row('Upload from the share sheet', 'Web app only (Safari / Home Screen), not the sideloaded app. Send audio straight from AirDrop, Files or iMessage.', h('button', { className: 'btn', onclick: () => { d.close(); shortcutDialog(); } }, 'Set up'))),
     h('div', { className: 'set-sec' }, h('h3', {}, '[account]'),
-      S.me && row(h('span', { className: 'me-row' }, meAvatar, h('span', {}, S.me.username, h('small', {}, S.me.isAdmin ? 'Admin' : 'Member'))), null,
-        h('span', { className: 'btns', style: { margin: 0 } },
-          h('button', { className: 'btn', async onclick() {
-            const [file] = await pickFiles('image/*,.heic,.heif', false);
-            if (!file) return;
-            try { const avatar = await avatarData(file); await api('/me', { method: 'PATCH', body: { avatar } }); S.me.avatar = avatar; paintAvatar(meAvatar, avatar); renderSide(); } catch (e) { oops(e); }
-          } }, 'Picture'),
-          h('button', { className: 'btn', async onclick() {
-            const name = await prompt('Change username', S.me.username, { label: 'Username', ok: 'Save' });
-            if (!name || name === S.me.username) return;
-            try { await api('/me', { method: 'PATCH', body: { username: name } }); d.close(); load(); toast('Username changed'); } catch (e) { oops(e); }
-          } }, 'Rename'))),
+      S.me && row(h('span', { className: 'me-row' }, meAvatar, h('span', {}, nameOf(S.me), h('small', {}, `@${S.me.username} · ${S.me.isAdmin ? 'Admin' : 'Member'}`))), null,
+        h('button', { className: 'btn', async onclick() {
+          const [file] = await pickFiles('image/*,.heic,.heif', false);
+          if (!file) return;
+          try { const avatar = await avatarData(file); await api('/me', { method: 'PATCH', body: { avatar } }); S.me.avatar = avatar; paintAvatar(meAvatar, avatar, nameOf(S.me)); renderSide(); } catch (e) { oops(e); }
+        } }, 'Picture')),
+      S.me && row('Display name', 'What people see on comments, activity and things you share',
+        h('button', { className: 'btn', async onclick() {
+          const name = await prompt('Display name', S.me.displayName || '', { label: 'Your name (leave it empty to show your username)', optional: true, max: 40 });
+          if (name == null || name === (S.me.displayName || '')) return;
+          try { await api('/me', { method: 'PATCH', body: { display_name: name } }); d.close(); load(); toast(name ? 'Name changed' : 'Showing your username'); } catch (e) { oops(e); }
+        } }, 'Edit')),
+      S.me && row('Username', `@${S.me.username} · unique, for signing in and being added to projects`,
+        h('button', { className: 'btn', async onclick() {
+          const name = await prompt('Change username', S.me.username, { label: 'Username', ok: 'Save' });
+          if (!name || name === S.me.username) return;
+          try { await api('/me', { method: 'PATCH', body: { username: name } }); d.close(); load(); toast('Username changed'); } catch (e) { oops(e); }
+        } }, 'Change')),
       S.me?.storage === 'drive' && row('Google Drive', S.me.driveEmail || (S.me.driveConnected ? 'Connected' : 'Not connected'),
         h('a', { className: 'btn', href: '/api/drive/connect' }, S.me.driveConnected ? 'Reconnect' : 'Connect')),
       S.me?.isAdmin && row('People', 'Invite codes and accounts', h('button', { className: 'btn', onclick: () => { d.close(); peopleDialog(); } }, 'Manage')),
@@ -2428,11 +2455,11 @@ function deleteAccountDialog() {
     const btn = this.querySelector('.danger');
     btn.disabled = true; err.textContent = ''; btn.textContent = 'Deleting…';
     try {
-      while ((await api('/me/delete', { method: 'POST', body: { password: pw.value } })).more);
+      await untilDone(() => api('/me/delete', { method: 'POST', body: { password: pw.value } }));
       d.close(); await logout();
     } catch (x) { err.textContent = x.message; btn.disabled = false; btn.textContent = 'Delete my account'; }
   } }, h('h2', {}, 'Delete your account?'),
-  h('p', { className: 'muted', style: { margin: 0 } }, `This deletes ${S.me.username}, every project and track, and the files [vault] put in your Google Drive. Links you shared stop working. It can't be undone.`),
+  h('p', { className: 'muted', style: { margin: 0 } }, `This deletes your account (@${S.me.username}), every project and track, and the files [vault] put in your Google Drive. Links you shared stop working. It can't be undone.`),
   h('label', {}, 'Type your password to confirm', pw), err,
   h('div', { className: 'btns' }, h('button', { type: 'button', className: 'btn ghost', onclick: () => d.close() }, 'Cancel'), h('button', { className: 'btn danger' }, 'Delete my account'))));
 }
@@ -2459,7 +2486,7 @@ async function peopleDialog() {
         h('button', { className: 'btn', async onclick() { const { code } = await api('/admin/invites', { method: 'POST' }).catch(oops) || {}; if (code) await copy(code); draw(); } }, icon('plus', 14), 'New invite code')),
       h('div', { className: 'set-sec' }, h('h3', {}, '[accounts]'),
         users.map(u => h('div', { className: 'set-row' }, h('span', { className: 'me-row' }, avatarEl(u, 'avatar lg'),
-          h('span', {}, u.username + (u.disabled ? ' (off)' : ''), h('small', {}, u.is_admin ? `Admin · Backblaze · ${fmtBytes(u.used)}` : `${u.tracks} ${u.tracks === 1 ? 'track' : 'tracks'} · ${fmtBytes(u.used)} · ${u.drive ? 'Google Drive' : 'Drive not connected'}`))),
+          h('span', {}, nameOf(u) + (u.display_name ? ` @${u.username}` : '') + (u.disabled ? ' (off)' : ''), h('small', {}, u.is_admin ? `Admin · Backblaze · ${fmtBytes(u.used)}` : `${u.tracks} ${u.tracks === 1 ? 'track' : 'tracks'} · ${fmtBytes(u.used)} · ${u.drive ? 'Google Drive' : 'Drive not connected'}`))),
           !u.is_admin && h('span', { className: 'btns', style: { margin: 0 } },
             h('button', { className: 'btn', async onclick() {
               if (!(await confirm(`Reset ${u.username}'s password?`, 'You get a temporary password to send them. Their devices are logged out; they can change it in Settings → Account.', 'Reset'))) return;
@@ -2470,7 +2497,7 @@ async function peopleDialog() {
             h('button', { className: 'btn danger', async onclick() {
               if (!(await confirm(`Delete ${u.username}?`, 'Their projects are deleted, along with the files [vault] made in their Google Drive. This can\'t be undone.', 'Delete'))) return;
               const t = toast('Deleting…', { ms: 0 });
-              try { while ((await api(`/admin/users/${u.id}`, { method: 'DELETE' })).more); } catch (e) { oops(e); }
+              try { await untilDone(() => api(`/admin/users/${u.id}`, { method: 'DELETE' })); } catch (e) { oops(e); }
               t.remove(); draw();
             } }, 'Delete'))))));
   }
@@ -2512,6 +2539,11 @@ async function shortcutDialog() {
 }
 
 // ---- trash ----------------------------------------------------------------------------------
+// Deleting for good happens a batch at a time on the server: keep asking while it says there's more.
+async function untilDone(call) {
+  for (let i = 0; i < 300; i++) if (!(await call()).more) return;
+  throw new Error("That's taking a while. Try again in a minute; it carries on where it stopped.");
+}
 async function restore(kind, id) {
   await api('/trash/restore', { method: 'POST', body: { kind, id } }).catch(oops);
   await load();
@@ -2523,7 +2555,9 @@ async function renderTrash() {
   const body = h('div', { className: 'tracks' }, h('div', { className: 'muted', style: { padding: '20px 10px' } }, 'Loading…'));
   const emptyBtn = h('button', { className: 'btn danger', disabled: true, async onclick() {
     if (!(await confirm('Empty the trash?', 'Everything in Recently deleted is removed for good, including every saved version.', 'Empty trash'))) return;
-    await api('/trash/empty', { method: 'POST' }).catch(oops); load(); toast('Trash emptied');
+    const note = toast('Emptying the trash…', { ms: 0 });
+    try { await untilDone(() => api('/trash/empty', { method: 'POST' })); toast('Trash emptied'); } catch (e) { oops(e); }
+    note.remove(); load();
   } }, icon('trash', 15), 'Empty trash');
   main.replaceChildren(
     h('div', { className: 'toolbar' }, h('button', { id: 'menu-btn', className: 'icon-btn', 'aria-label': 'Menu', onclick: () => document.body.classList.toggle('side-open') }, icon('menu', 20))),
@@ -2542,7 +2576,7 @@ async function renderTrash() {
     h('button', { className: 'btn', onclick: () => restore(kind, id) }, 'Restore'),
     h('button', { className: 'icon-btn', 'aria-label': `Delete ${title} forever`, title: 'Delete forever', async onclick() {
       if (!(await confirm(`Delete “${title}” forever?`, 'This can’t be undone.', 'Delete forever'))) return;
-      await api(`/trash/${kind}/${id}`, { method: 'DELETE' }).catch(oops); load();
+      await untilDone(() => api(`/trash/${kind}/${id}`, { method: 'DELETE' })).catch(oops); load();
     } }, icon('trash', 16)));
   const items = [
     ...data.projects.map(p => row(p.cover, p.name, `Project · ${p.tracks} ${p.tracks === 1 ? 'track' : 'tracks'} · ${left(p.deleted_at)} days left`, 'project', p.id)),
@@ -2821,7 +2855,9 @@ async function storageDialog() {
       line('old', 'Old versions', s.old, 'Earlier versions kept from edits', s.old > 0 && h('button', { className: 'btn', onclick: async () => { if (await cleanVersions()) draw(); } }, 'Delete')),
       line('trash', 'Recently deleted', s.trash, 'Goes for good after 30 days', s.trash > 0 && h('button', { className: 'btn', async onclick() {
         if (!(await confirm('Empty Recently deleted?', 'Everything in it is deleted for good.', 'Empty'))) return;
-        await api('/trash/empty', { method: 'POST' }).catch(oops); toast(`Freed ${fmtBytes(s.trash)}`); await load(); draw();
+        const note = toast('Emptying…', { ms: 0 });
+        try { await untilDone(() => api('/trash/empty', { method: 'POST' })); toast(`Freed ${fmtBytes(s.trash)}`); } catch (e) { oops(e); }
+        note.remove(); await load(); draw();
       } }, 'Empty')),
       line('dev', 'Kept on this device', keptBytes(), 'Played songs, so they don\'t download again; not counted in your storage', keptBytes() > 0 && h('button', { className: 'btn', async onclick() {
         await caches.delete(KEPT); store.set('played', {}); toast('Cleared. Songs will download again the next time they play.'); draw();
@@ -2836,10 +2872,10 @@ async function storageDialog() {
     s.tracks.length > 0 && h('div', { className: 'field' }, h('span', { className: 'field-l' }, 'Biggest tracks'),
       h('div', { className: 'st-list' }, s.tracks.slice(0, 15).map(t => h('div', { className: 'st-item' },
         h('button', { className: 'grow st-open', onclick: () => { const x = trackOf(t.id); if (!x) return; detailsDialog(x); [...document.querySelectorAll('dialog')].pop().addEventListener('close', () => draw()); } }, t.name,
-          h('small', {}, [projectOf(t.project_id)?.name, (t.file_key.split('.').pop() || '').toUpperCase(), t.versions > 1 && `${t.versions} versions`].filter(Boolean).join(' · '))),
+          h('small', {}, [projectOf(t.project_id)?.name, /\.[a-z0-9]{2,5}$/i.test(t.file_key) && t.file_key.split('.').pop().toUpperCase(), t.versions > 1 && `${t.versions} versions`].filter(Boolean).join(' · '))),
         h('span', { className: 'st-mini' }, h('i', { style: { width: (t.size / topT) * 100 + '%' } })), h('span', { className: 'num st-v' }, fmtBytes(t.size)),
         h('button', { className: 'icon-btn sm', 'aria-label': `Move ${t.name} to the trash`, title: 'Move to trash', async onclick() {
-          await api(`/tracks/${t.id}`, { method: 'DELETE' }).catch(oops);
+          if (!(await api(`/tracks/${t.id}`, { method: 'DELETE' }).then(() => true, oops))) return;
           this.closest('.st-item').classList.add('gone');
           toast(`Moved “${t.name}” to the trash`, { ms: 7000, action: { label: 'Undo', run: () => restore('track', t.id).then(draw) } });
           await load(); setTimeout(draw, 400);

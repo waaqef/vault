@@ -946,6 +946,8 @@ dialog.editor.closing { animation: sheet-down .28s var(--ease) forwards !importa
 .swatch:active, .fs-icon:active { transform: scale(.9); }
 /* editor: tab contents fade in when you switch */
 .ed-panel > * { animation: fade .25s var(--ease) both; }
+/* …but not when something inside the same tab is redrawn (picking an EQ band, a filter type) */
+.ed-panel.still > * { animation: none; }
 /* a waveform that was just drawn fades in */
 .c-wave.fresh svg { animation: fade .6s var(--ease); }
 /* upload details fade in when the pill opens */

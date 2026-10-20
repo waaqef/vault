@@ -33,13 +33,18 @@ try {
 
   const owner = (await call(null, 'POST', '/api/login', { password: PW })).cookie;
   assert.ok(owner, 'admin logs in with the admin password');
-  const person = async name => {
+  const person = async (name, display_name) => {
     const { data } = await call(owner, 'POST', '/api/admin/invites');
-    const r = await call(null, 'POST', '/api/signup', { invite: data.code, username: name, password: 'password123' });
+    const r = await call(null, 'POST', '/api/signup', { invite: data.code, username: name, display_name, password: 'password123' });
     assert.ok(r.cookie, `${name} signs up with an invite (${JSON.stringify(r.data)})`);
     return r.cookie;
   };
-  const [editor, listener, stranger] = [await person('eddie'), await person('lisa'), await person('stranger')];
+  const [editor, listener, stranger] = [await person('eddie'), await person('lisa', 'Lisa L'), await person('stranger')];
+
+  // usernames are unique; trying a taken one doesn't use up the invite
+  const { data: { code } } = await call(owner, 'POST', '/api/admin/invites');
+  assert.equal((await call(null, 'POST', '/api/signup', { invite: code, username: 'lisa', password: 'password123' })).data.error, 'That username is taken.');
+  assert.ok((await call(null, 'POST', '/api/signup', { invite: code, username: 'lisa2', password: 'password123' })).cookie, 'the invite still works after a taken username');
 
   const { data: { id: project } } = await call(owner, 'POST', '/api/projects', { name: 'Beats' });
   const audio = wav(10), up = (await call(owner, 'POST', '/api/upload-url', { name: 'a.wav', type: 'audio/wav', size: audio.length })).data;
@@ -69,6 +74,10 @@ try {
 
   // comments: people on the project yes, strangers no
   assert.equal((await call(listener, 'POST', `/api/tracks/${track}/comments`, { body: 'nice', at: 3 })).status, 200, 'a listener commenting');
+  const [said] = (await call(owner, 'GET', `/api/tracks/${track}/comments`)).data;
+  assert.equal(said.name, 'Lisa L', 'comments show the display name');
+  assert.ok(said.user_id, 'comments say who wrote them (so people can delete their own)');
+  assert.equal((await call(owner, 'GET', `/api/projects/${project}/members`)).data.find(m => m.username === 'lisa').display_name, 'Lisa L');
   assert.equal((await call(stranger, 'POST', `/api/tracks/${track}/comments`, { body: 'hi' })).status, 404, 'a stranger commenting');
 
   // share links: signed-out visitors get a short preview; a public link plays in full
@@ -78,6 +87,29 @@ try {
   assert.equal((await call(null, 'GET', `/s/${token}/download/${track}`)).status, 401, "a visitor can't download");
   await call(owner, 'PATCH', `/api/shares/${token}`, { public: true });
   assert.ok((await call(null, 'GET', `/s/${token}/audio/${track}?full=1`)).bytes >= full.bytes, 'a public link plays in full');
+
+  // bad edits are ignored rather than breaking the track: no project, a blank name
+  await call(owner, 'PATCH', `/api/tracks/${track}`, { project_id: null, name: '   ' });
+  const kept = (await call(owner, 'GET', '/api/tree')).data.tracks.find(t => t.id === track);
+  assert.ok(kept && kept.project_id === project && kept.name === 'a', 'a track keeps its project and name');
+
+  // deleting for good goes in batches (a free-plan Worker can only make 50 requests per call)
+  const { data: { id: big } } = await call(owner, 'POST', '/api/projects', { name: 'Big' });
+  const keys = [];
+  for (let i = 0; i < 40; i += 10) await Promise.all(Array.from({ length: 10 }, async () => {
+    const small = wav(0.1), u2 = (await call(owner, 'POST', '/api/upload-url', { name: 'b.wav', type: 'audio/wav', size: small.length, project_id: big })).data;
+    await fetch(B + u2.url, { method: 'PUT', body: small, headers: { 'content-type': 'audio/wav' } });
+    await call(owner, 'POST', '/api/tracks', { project_id: big, name: 'b', file_key: u2.key, duration: 0.1 });
+    keys.push(u2.key);
+  }));
+  await call(owner, 'DELETE', `/api/trash/project/${big}`);
+  assert.ok((await call(owner, 'GET', '/api/tree')).data.projects.some(p => p.id === big), 'only things in the trash can be deleted for good');
+  await call(owner, 'DELETE', `/api/projects/${big}`);
+  let calls = 0;
+  for (let more = true; more; calls++) more = (await call(owner, 'DELETE', `/api/trash/project/${big}`)).data.more;
+  assert.ok(calls > 1, 'a big project takes more than one call');
+  assert.equal((await call(owner, 'GET', '/api/trash')).data.projects.length, 0, 'and then it is gone');
+  assert.equal((await fetch(`${B}/blob/${keys[0]}`)).status, 404, 'with its files');
 
   // leaving and removing
   await call(listener, 'POST', '/api/shared/leave', { project_id: project });
