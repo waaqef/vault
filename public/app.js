@@ -526,17 +526,32 @@ function renderHome(toolbar) {
     h('div', { className: 'home-hero' },
       h('div', { className: 'eyebrow' }, `[${hello}]`),
       h('h1', {}, 'Home'),
-      h('div', { className: 'meta mono' }, `${S.tracks.length} tracks · ${S.projects.length} projects`)),
-    !S.tracks.length && !S.projects.length && h('div', { className: 'empty' }, h('span', { className: 'disc' }), h('b', {}, 'Nothing here yet'), 'Make a project, then drag audio files in or press Upload.'),
+      S.tracks.length > 0 && h('div', { className: 'meta mono' }, `${S.tracks.length} tracks · ${S.projects.length} projects`)),
+    // a brand-new library: three plain steps instead of an empty page
+    !S.tracks.length && h('section', { className: 'get-started' }, // until the first song is in
+      h('h2', {}, 'Get started'),
+      h('div', { className: 'gs-steps' },
+        h('button', { className: 'gs-step', disabled: !S.online, async onclick() { const f = await pickFiles(ACCEPT_AUDIO); f.length && uploadTracks(f, await targetProject()); } },
+          h('span', { className: 'gs-n mono' }, '1'), h('b', {}, 'Upload a song'), h('span', {}, 'Beats, demos, voice memos. Or drag files onto the page.')),
+        h('button', { className: 'gs-step' + (S.projects.length ? ' done' : ''), onclick: () => newProject(null) },
+          h('span', { className: 'gs-n mono' }, S.projects.length ? '✓' : '2'), h('b', {}, 'Make a project'), h('span', {}, S.projects.length ? 'Done. Make more any time.' : 'Group tracks like an album or a folder of ideas.')),
+        h('div', { className: 'gs-step' },
+          h('span', { className: 'gs-n mono' }, '3'), h('b', {}, 'Share it'), h('span', {}, 'Open a project and tap Share to send a link or add people.')))),
+    // projects: one row of the most recent (two on phones), the full grid with folder filters behind "See all"
     S.projects.length > 0 && h('section', { className: 'shelf' },
-      h('div', { className: 'shelf-h' }, h('h2', {}, 'Projects'), h('button', { className: 'btn ghost', onclick: () => newProject(S.homeFolder) }, icon('plus', 15), 'New')),
-      chips,
-      projects.length ? h('div', { className: 'card-grid' }, projects.map(card)) : h('div', { className: 'muted' }, 'No projects in this folder yet.')),
+      h('div', { className: 'shelf-h' }, h('h2', {}, S.homeAll ? 'All projects' : 'Recent projects'),
+        h('span', { className: 'shelf-acts' },
+          h('button', { className: 'btn ghost', onclick: () => newProject(S.homeFolder) }, icon('plus', 15), 'New'),
+          S.projects.length > 4 && h('button', { className: 'btn ghost', onclick: () => { S.homeAll = !S.homeAll; if (!S.homeAll) S.homeFolder = null; renderMain(); } },
+            S.homeAll ? 'Show less' : `See all ${S.projects.length}`))),
+      S.homeAll && chips,
+      projects.length ? h('div', { className: 'card-grid' + (S.homeAll ? '' : ' peek') }, (S.homeAll ? projects : projects.slice(0, 12)).map(card))
+        : h('div', { className: 'muted' }, 'No projects in this folder yet.')),
     shelf('Jump back in', recent),
     shelf('Starred', starred, () => setView({ type: 'starred' })),
-    shelf('Recently added', newest.slice(0, 12), () => setView({ type: 'all' })));
+    !S.homeAll && shelf('Recently added', newest.slice(0, 12), () => setView({ type: 'all' })));
 
-  const key = JSON.stringify(S.view) + S.homeFolder;
+  const key = JSON.stringify(S.view) + S.homeFolder + S.homeAll;
   const fresh = key !== lastView; lastView = key;
   main.replaceChildren(toolbar, page);
   main.classList.toggle('enter', fresh);

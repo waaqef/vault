@@ -1319,3 +1319,19 @@ dialog:focus, dialog:focus-visible { outline: none !important; } /* beats the re
 /* a cover's own colours: keep them (no hue cycling), keep the slow drift */
 :root.glassy.cover-tint #holo i { animation: holo-drift 40s ease-in-out infinite alternate; filter: saturate(140%) brightness(1.4); }
 :root.glassy #holo i { transition: opacity .6s ease; }
+/* home: one row of recent projects (two on phones); "See all" shows the whole grid */
+.card-grid.peek { grid-template-rows: auto; grid-auto-rows: 0; row-gap: 0; overflow: hidden; }
+.card-grid.peek > * { min-height: 0; }
+.shelf-acts { display: flex; gap: 6px; }
+@media (max-width: 760px) { .card-grid.peek { grid-template-rows: auto auto; row-gap: 18px; } }
+/* home: first steps for an empty library */
+.get-started { padding: 22px; border-radius: 20px; background: var(--fill-1); margin-top: 8px; }
+.get-started h2 { margin: 0 0 14px; font-size: 20px; font-weight: 600; letter-spacing: -0.03em; }
+.gs-steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
+.gs-step { display: grid; gap: 4px; text-align: left; padding: 16px; border-radius: 14px; border: 0; background: var(--fill-2); color: var(--fg-2); font: inherit; font-size: 13px; line-height: 1.4; }
+button.gs-step { cursor: pointer; transition: background .15s, transform .12s var(--ease); }
+button.gs-step:hover { background: var(--fill-3); }
+button.gs-step:active { transform: scale(.98); }
+.gs-step b { color: var(--fg); font-size: 15px; font-weight: 600; }
+.gs-n { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; background: var(--fill-3); color: var(--fg); margin-bottom: 6px; }
+.gs-step.done .gs-n { background: var(--fg); color: var(--bg); }
