@@ -176,9 +176,9 @@ async function load() {
   if (S.view.type === 'project' && !projectOf(S.view.id)) S.view = { type: 'all' };
   render();
   const back = new URLSearchParams(location.search).get('drive');
-  if (back) { history.replaceState(null, '', '/'); toast(back === 'connected' ? 'Google Drive connected' : back, { error: back !== 'connected', ms: 6000 }); }
+  if (back) { history.replaceState(null, '', '/library'); toast(back === 'connected' ? 'Google Drive connected' : back, { error: back !== 'connected', ms: 6000 }); }
   const deep = new URLSearchParams(location.search).get('track');
-  if (deep) { history.replaceState(null, '', '/'); if (trackOf(deep)) (canEdit(trackOf(deep).project_id) ? detailsDialog : commentsDialog)(trackOf(deep)); }
+  if (deep) { history.replaceState(null, '', '/library'); if (trackOf(deep)) (canEdit(trackOf(deep).project_id) ? detailsDialog : commentsDialog)(trackOf(deep)); }
 }
 
 function showLogin() {
@@ -203,6 +203,7 @@ function showLogin() {
     const user = field('text', 'username', { placeholder: 'leave empty for admin' }), pw = field('password', 'current-password', { required: true });
     fill(box, head, h('div', { className: 'brandmark' }, '[vault]'), form(async () => {
       await api('/login', { method: 'POST', body: { username: user.value.trim(), password: pw.value } });
+      history.replaceState(null, '', '/library' + location.search); // signed in: the address becomes the library
       d.close(); load();
     }, h('label', {}, '[username]', user), h('label', {}, '[password]', pw), err(), h('button', { className: 'btn primary', style: big }, 'Sign in')),
     link('Have an invite code? Sign up', signUp),
@@ -279,7 +280,7 @@ async function logout() {
   await fetch('/api/logout').catch(() => {});
   try { localStorage.removeItem('tree'); localStorage.removeItem('offline'); localStorage.removeItem('view'); } catch {}
   await Promise.all(['audio', 'played'].map(c => caches.delete(c).catch(() => {})));
-  location.reload();
+  location.replace('/login');
 }
 
 // ---- rendering ------------------------------------------------------------------

@@ -54,7 +54,7 @@ ${exists ? `<audio id="a" controls hidden></audio>
 const token = location.pathname.split('/')[2], base = '/s/' + token, m = document.getElementById('m'), a = document.getElementById('a');
 const el = (t, p = {}, ...k) => { const e = document.createElement(t); Object.assign(e, p); e.append(...k); return e; };
 const fmt = s => s ? Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0') : '';
-const brand = () => el('a', { className: 'brand', href: '/', textContent: '[vault]' });
+const brand = () => el('a', { className: 'brand', href: '/login', textContent: '[vault]' });
 let name = ''; try { name = localStorage.getItem('listener') || ''; } catch {}
 async function open(password) {
   const r = await fetch(base + '/open', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password }) });
@@ -77,7 +77,7 @@ function show(d) {
   const gate = full ? null : el('div', { className: 'gate' },
     el('div', { className: 'mono', textContent: '[preview]' }),
     el('p', { textContent: 'You\u2019re hearing ' + d.preview + '-second previews. Sign in to [vault] to hear the full songs, comment' + (d.allow_download ? ', download' : '') + ' and save this to your library.' }),
-    el('div', { className: 'acts' }, el('a', { href: '/?next=' + next, textContent: 'Sign in' }), el('a', { className: 'alt', href: '/?signup=1&next=' + next, textContent: 'Sign up with an invite code' })),
+    el('div', { className: 'acts' }, el('a', { href: '/login?next=' + next, textContent: 'Sign in' }), el('a', { className: 'alt', href: '/login?signup=1&next=' + next, textContent: 'Sign up with an invite code' })),
     askInvite());
   // No invite code? Send the admin a request (name, how to reach you, a note).
   function askInvite() {

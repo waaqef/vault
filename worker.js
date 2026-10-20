@@ -1230,6 +1230,15 @@ export default {
       if (path === '/google6e583667ce62f72e.html') return new Response('google-site-verification: google6e583667ce62f72e.html', { headers: { 'content-type': 'text/html; charset=utf-8' } });
       if (path.startsWith('/s/')) return await handleShare(req, env, url, ctx);
       if (path.startsWith('/blob/') && env.LOCAL) return await localBlob(req, env, path.slice(6));
+      // The landing page is the front door (/), signing in is /login and the app itself is /library.
+      // Signed-in people, and links into the app (like /?track=… from notifications), go straight to /library.
+      if (path === '/about' || path === '/about/') return Response.redirect(url.origin + '/', 301);
+      if (path === '/' || path === '/login') {
+        const signedIn = !!(await userFromCookie(req, env));
+        if (signedIn || (path === '/' && url.search)) return Response.redirect(`${url.origin}/library${url.search}`, 302);
+        return env.ASSETS.fetch(new Request(new URL(path === '/' ? '/about' : '/', url), req));
+      }
+      if (path === '/library') return env.ASSETS.fetch(new Request(new URL('/', url), req));
       if (path === '/sw.js') {
         const r = await env.ASSETS.fetch(req);
         const v = env.VERSION?.id || 'dev';

@@ -1,6 +1,6 @@
 // Keeps the app itself available offline. Downloaded audio is stored separately by app.js (Cache "audio").
 const V = 'shell-__VERSION__'; // filled in by the server with the deploy's id
-const SHELL = ['/', '/style.css', '/app.js', '/editor.js', '/types.js', '/wav.js', '/lib/soundtouch.js', '/icons.js', '/settings.js', '/detect.js', '/zip.js', '/wave.js', '/fonts/inter.woff2', '/fonts/plex-mono.woff2', '/manifest.json', '/icon.svg', '/icon-192.png'];
+const SHELL = ['/library', '/style.css', '/app.js', '/editor.js', '/types.js', '/wav.js', '/lib/soundtouch.js', '/icons.js', '/settings.js', '/detect.js', '/zip.js', '/wave.js', '/fonts/inter.woff2', '/fonts/plex-mono.woff2', '/manifest.json', '/icon.svg', '/icon-192.png'];
 
 self.addEventListener('install', e => e.waitUntil(caches.open(V).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())));
 self.addEventListener('activate', e => e.waitUntil(
@@ -15,7 +15,7 @@ self.addEventListener('fetch', e => {
   e.respondWith(fetch(req).then(r => {
     if (r.ok) { const copy = r.clone(); caches.open(V).then(c => c.put(e.request, copy)); }
     return r;
-  }).catch(() => caches.match(e.request, { ignoreSearch: true }).then(r => r || caches.match('/'))));
+  }).catch(() => caches.match(e.request, { ignoreSearch: true }).then(r => r || caches.match('/library'))));
 });
 
 // Push notifications (listens and comments on share links).

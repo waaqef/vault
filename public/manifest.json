@@ -2,7 +2,7 @@
   "name": "[vault]",
   "short_name": "[vault]",
   "description": "Your work-in-progress music",
-  "start_url": "/",
+  "start_url": "/library",
   "display": "standalone",
   "background_color": "#191919",
   "theme_color": "#191919",

@@ -1,6 +1,6 @@
 # Public pages only. The app, its API and private share links stay out of search results.
 User-agent: *
-Allow: /about
+Allow: /$
 Allow: /privacy
 Allow: /terms
 Disallow: /api/

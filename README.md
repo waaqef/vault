@@ -1,6 +1,6 @@
 # [vault]
 
-**Live:** https://vault.choseroxy.workers.dev/about
+**Live:** https://vault.choseroxy.workers.dev
 
 **Support:** [ko-fi.com/choseroxy](https://ko-fi.com/choseroxy) ☕
 
