@@ -574,7 +574,9 @@ function renderHome(toolbar) {
         h('div', { className: 'shelf-h' },
           S.homeAll ? h('button', { className: 'btn ghost back-btn', onclick: () => { S.homeAll = false; S.homeFolder = null; renderMain(); } }, icon('chevron', 15), 'Back')
             : h('h2', {}, 'Recent projects'),
-          h('span', { className: 'shelf-acts' }, h('button', { className: 'btn ghost', onclick: () => newProject(S.homeFolder) }, icon('plus', 15), 'New'))),
+          h('span', { className: 'shelf-acts' },
+            !S.homeAll && h('button', { className: 'btn ghost', onclick: customizeHome }, icon('sliders', 15), 'Customize'),
+            h('button', { className: 'btn ghost', onclick: () => newProject(S.homeFolder) }, icon('plus', 15), 'New'))),
         S.homeAll && h('h2', { className: 'all-title' }, 'All projects'),
         S.homeAll && chips,
         S.homeAll ? (projects.length ? h('div', { className: 'card-grid' }, projects.map(card)) : h('div', { className: 'muted' }, 'No projects in this folder yet.'))
@@ -583,7 +585,8 @@ function renderHome(toolbar) {
       starred: () => shelf('Starred', starred, () => setView({ type: 'starred' })),
       added: () => shelf('Recently added', newest.slice(0, 12), () => setView({ type: 'all' })),
     })[x.k]?.()),
-    !S.homeAll && (S.tracks.length > 0 || S.projects.length > 0) && h('div', { className: 'home-foot' }, h('button', { className: 'btn ghost', onclick: customizeHome }, icon('sliders', 15), 'Customize home')));
+    // only when Recent projects is hidden (its header has the Customize button otherwise)
+    !S.homeAll && !(S.projects.length && homeLayout().some(x => x.k === 'projects' && x.on)) && h('div', { className: 'home-foot' }, h('button', { className: 'btn ghost', onclick: customizeHome }, icon('sliders', 15), 'Customize home')));
 
   const key = JSON.stringify(S.view) + S.homeFolder + S.homeAll;
   lastHomeCols = homeCols();
