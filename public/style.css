@@ -397,6 +397,16 @@ dialog.editor[open] { animation: sheet-up .42s var(--ease); }
 .tool:active { transform: scale(.96); }
 .tool.on { background: var(--hi); color: var(--on-accent, #fff); box-shadow: none; }
 .preset-row { display: flex; gap: 8px; }
+.sec-bar { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 10px 8px; flex: none; padding: 12px; border-radius: 14px; background: var(--fill-1); box-shadow: inset 0 0 0 1px var(--line); }
+.sec-t { display: grid; gap: 2px; }
+.sec-btns { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.sec-btns .mode { justify-content: center; height: 40px; }
+.sec-t .mono { font-size: 11px; color: var(--fg-3); }
+.sec-t small { font-size: 12px; color: var(--fg-3); }
+.tools-grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.tool:disabled { opacity: .35; transform: none; cursor: default; }
+.tool .ic { vertical-align: -2px; }
+.tool-h { font-size: 11px; color: var(--fg-3); margin-bottom: -6px; }
 .preset-row select { flex: 1; min-width: 0; }
 .meters { display: flex; gap: 12px; align-items: center; color: var(--fg-3); font-family: var(--mono); font-size: 11px; padding: 6px 2px; }
 .meters .bar { flex: 1; height: 4px; margin: 0; }

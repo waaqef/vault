@@ -754,22 +754,40 @@ export async function openEditor(track, app) {
         h('div', { className: 'note' }, 'Keeps peaks under the ceiling so the file never clips.'),
       ];
     } else {
-      const tool = (label, fn) => h('button', { className: 'tool', onclick: fn }, label);
+      // A section is set at the playhead (Start here / End here) or with the handles on the overview strip.
+      // Section tools stay greyed out until there is one; the rest work on the section, or the whole track without one.
+      const tool = (label, fn, off = false) => h('button', { className: 'tool', disabled: off, onclick: fn }, label);
+      const mark = end => {
+        const p = pos(), d = buf.duration;
+        const [a, b] = end ? [sel && sel[0] < p - 0.1 ? sel[0] : 0, p] : [p, sel && sel[1] > p + 0.1 ? sel[1] : d];
+        if (b - a < 0.1) return toast(end ? 'Move past the start first' : 'Move before the end first', { ms: 1800 });
+        sel = a <= 0.01 && b >= d - 0.01 ? null : [a, b];
+        haptic(); renderPanel();
+      };
       const presetSel = h('select', { 'aria-label': 'Presets', onchange() { loadPreset(this.value); this.value = ''; } },
         h('option', { value: '' }, 'Load preset'), presets.map(p => h('option', { value: p.id }, p.name)),
         presets.length > 0 && h('option', { value: '__delete' }, 'Delete a preset…'));
       content = [
-        h('div', { className: 'note' }, sel ? `Section ${fmt(sel[0])} – ${fmt(sel[1])}. Tools apply to it.` : 'Drag the handles on the overview strip to pick a section. Without one, tools apply to the whole track.'),
+        h('div', { className: 'sec-bar' },
+          h('div', { className: 'sec-t' }, h('span', { className: 'mono' }, '[section]'),
+            h('b', { className: 'num' }, sel ? `${fmt(sel[0])} – ${fmt(sel[1])}` : 'None'),
+            !sel && h('small', {}, 'Play to a spot, then tap Start here and End here')),
+          sel && h('button', { className: 'mode', 'aria-label': 'Clear the section', title: 'Clear', onclick: () => { sel = null; renderPanel(); } }, icon('close', 14)),
+          h('div', { className: 'sec-btns' },
+            h('button', { className: 'mode', onclick: () => mark(false) }, 'Start here'),
+            h('button', { className: 'mode', onclick: () => mark(true) }, 'End here'))),
+        h('div', { className: 'tools-grid two' },
+          tool('Keep only this', () => edit('Trim', trim), !sel), tool('Cut it out', () => edit('Cut', cut), !sel),
+          tool('Silence it', () => edit('Silence', silence), !sel),
+          h('button', { className: 'tool' + (loop && sel ? ' on' : ''), disabled: !sel, 'aria-pressed': loop && !!sel, onclick() { loop = !loop; if (playing) play(pos()); renderPanel(); } }, 'Loop it')),
+        h('div', { className: 'tool-h mono' }, sel ? '[on the section]' : '[on the whole track]'),
         h('div', { className: 'tools-grid' },
-          tool('Trim', () => edit('Trim', trim)), tool('Cut', () => edit('Cut', cut)), tool('Silence', () => edit('Silence', silence)),
           tool('Fade in', () => edit('Fade in', b => fade(b, true))), tool('Fade out', () => edit('Fade out', b => fade(b, false))), tool('Normalize', () => edit('Normalize', normalize)),
           tool('Reverse', () => edit('Reverse', reverse)), tool('Mono', () => edit('Mono', mono)),
-          h('button', { className: 'tool' + (loop ? ' on' : ''), 'aria-pressed': loop, onclick() { loop = !loop; if (playing) play(pos()); renderPanel(); } }, 'Loop section')),
-        h('div', { className: 'ed-modes' },
-          h('button', { className: 'mode', disabled: !undo.length, onclick: doUndo }, icon('undo', 14), 'Undo'),
-          h('button', { className: 'mode', onclick: () => { s = defaults(); syncLinked(); rebuild(); live(); renderPanel(); toast('Settings reset', { ms: 1500 }); } }, 'Reset'),
-          h('span', { className: 'grow' })),
-        h('div', { className: 'preset-row' }, presetSel, h('button', { className: 'mode', onclick: savePreset }, 'Save preset')),
+          h('button', { className: 'tool', disabled: !undo.length, title: undo.length ? `Undo ${ops[ops.length - 1]}` : 'Nothing to undo', onclick: doUndo }, icon('undo', 15), ' Undo')),
+        h('div', { className: 'tool-h mono' }, '[presets]'),
+        h('div', { className: 'preset-row' }, presetSel, h('button', { className: 'mode', onclick: savePreset }, 'Save'),
+          h('button', { className: 'mode', title: 'Speed, EQ, dynamics and gain back to how they started', onclick: () => { s = defaults(); syncLinked(); rebuild(); live(); renderPanel(); toast('Dials reset', { ms: 1500 }); } }, 'Reset dials')),
       ];
     }
     fill(panel, content);
