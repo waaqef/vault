@@ -1853,6 +1853,24 @@ async function playFrom(t, at) {
 // ponytail: volume fades need audio.volume, which iPhone Safari ignores; there it's a straight cut (still preloaded).
 const canFade = (() => { const x = new Audio(); x.volume = 0.5; return x.volume === 0.5; })();
 const tail = new Audio(); tail.preload = 'auto';
+// Volume: computers only (on phones the side buttons do it, and iPhones ignore it anyway). Remembered on this device.
+const showVol = canFade && matchMedia('(pointer: fine)').matches;
+let vol = showVol ? Math.min(1, Math.max(0, +store.get('volume', 1) || 0)) : 1;
+audio.volume = vol;
+function volumeControl() {
+  let before = vol || 1;
+  const btn = h('button', { className: 'icon-btn sm', onclick: () => setVol(vol ? ((before = vol), 0) : before) });
+  const range = h('input', { type: 'range', min: 0, max: 100, step: 1, 'aria-label': 'Volume', oninput() { setVol(this.value / 100); } });
+  range.addEventListener('wheel', e => { e.preventDefault(); setVol(Math.min(1, Math.max(0, vol - Math.sign(e.deltaY) * 0.05))); }, { passive: false });
+  const paint = () => {
+    range.value = Math.round(vol * 100); syncRange(range);
+    btn.replaceChildren(icon(vol === 0 ? 'mute' : vol < 0.5 ? 'volLow' : 'vol', 17));
+    btn.setAttribute('aria-label', vol ? 'Mute' : 'Unmute'); btn.title = vol ? `Volume ${Math.round(vol * 100)}%` : 'Muted';
+  };
+  function setVol(v) { vol = +v.toFixed(2); if (!fading) audio.volume = vol; store.set('volume', vol); paint(); }
+  paint();
+  return h('div', { className: 'vol' }, btn, range);
+}
 let fading = false, warmedFor = null;
 audio.addEventListener('timeupdate', () => {
   if (!cur || !audio.duration || audio.paused || P.repeat === 'one' || !realSrc()) return;
@@ -1871,15 +1889,15 @@ audio.addEventListener('timeupdate', () => {
 function startFade(secs) {
   fading = true;
   if (tail.src !== audio.currentSrc) tail.src = audio.currentSrc;
-  tail.currentTime = audio.currentTime; tail.volume = 1; tail.play().catch(() => {});
+  tail.currentTime = audio.currentTime; tail.volume = vol; tail.play().catch(() => {});
   audio.volume = 0;
   advance();
   const t0 = performance.now();
   (function step() {
     const p = Math.min(1, (performance.now() - t0) / (secs * 1000)), e = p * p * (3 - 2 * p);
-    audio.volume = e; tail.volume = 1 - e;
+    audio.volume = e * vol; tail.volume = (1 - e) * vol;
     if (p < 1) setTimeout(step, 40);
-    else { tail.pause(); audio.volume = 1; fading = false; }
+    else { tail.pause(); audio.volume = vol; fading = false; }
   })();
 }
 
@@ -1948,7 +1966,7 @@ function renderPlayer() {
       repeatBtn('hide-sm'),
       h('button', { className: 'icon-btn', 'aria-label': 'Up next', title: 'Up next', onclick: queueDialog }, icon('queue', 18)),
       canEdit(t.project_id) && h('button', { className: 'icon-btn', 'aria-label': 'Edit audio', title: 'Edit audio', onclick: () => openEditor(t) }, icon('sliders', 18))),
-    h('div', { className: 'seek' }, t1, seek, t2),
+    h('div', { className: 'seek' }, t1, seek, t2, showVol && volumeControl()),
   );
   marquees(el);
   if (fp) drawFullPlayer(); // keep the full-screen player in step (new track, star, shuffle…)

@@ -222,6 +222,8 @@ body.paused .np .thumb.disc { animation-play-state: paused; }
 .play:active { transform: scale(.94); }
 .seek { display: flex; align-items: center; gap: 10px; color: var(--fg-3); }
 .seek input { flex: 1; min-width: 0; }
+#player .vol { display: flex; align-items: center; gap: 2px; flex: none; margin-left: 6px; }
+#player .vol input { flex: none; width: 84px; }
 
 /* thin monochrome sliders; --p is the filled part, set from JS */
 input[type=range] { -webkit-appearance: none; appearance: none; background: none; height: 22px; cursor: pointer; --p: 50%; }
@@ -496,7 +498,7 @@ dialog.editor[open] { animation: sheet-up .42s var(--ease); }
   #player { grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 0 14px env(safe-area-inset-bottom); }
   #player .seek { position: absolute; left: 0; right: 0; top: -11px; }
   #player .seek span { display: none; }
-  #player .hide-sm { display: none; }
+  #player .hide-sm, #player .vol { display: none; }
   dialog.sheet { margin: auto 0 0; width: 100vw; max-width: 100vw; border-radius: 22px 22px 0 0; padding: 10px 10px calc(10px + env(safe-area-inset-bottom)); }
   dialog.sheet[open] { animation: sheet-up .32s var(--ease); }
   .sheet button { padding: 13px 14px; }
