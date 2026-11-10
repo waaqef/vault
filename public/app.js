@@ -5,7 +5,7 @@ import { decodeAudio, bpmKeyOf, parseName, trackInfo, readTags, cleanTitle, lead
 import { peaksOf, waveSvg } from './wave.js';
 import { makeZip, safeName } from './zip.js';
 
-const APP_VERSION = '[vault] v3.6.6'; // shown in Settings and sent with bug reports
+const APP_VERSION = '[vault] v3.7'; // shown in Settings and sent with bug reports
 // ---- helpers ------------------------------------------------------------------
 const $ = (s, el = document) => el.querySelector(s);
 function h(tag, attrs = {}, ...kids) {
@@ -2354,7 +2354,7 @@ function openFullPlayer() {
   // swipe down to close: the whole sheet follows your finger
   let start = null;
   d.addEventListener('pointerdown', e => {
-    if (e.target.closest('button, input, .fp-scrub, .fp-art')) return; // holding the cover doesn't drag the player
+    if (e.target.closest('button, input, .fp-scrub, .fp-art, .viz')) return; // holding the cover doesn't drag the player
     start = { y: e.clientY, t: performance.now() };
     d.style.transition = 'none';
   });
@@ -2369,6 +2369,21 @@ function openFullPlayer() {
   fp = { d };
   drawFullPlayer();
 }
+// The visualizer, over the full-screen player (it follows whatever is playing). Esc closes it, not the player.
+async function showVisualizer() {
+  if (!fp || fp.viz) return;
+  const { openVisualizer } = await import('./visualizer.js');
+  const d = fp.d;
+  const info = () => ({ title: cur?.name, artist: cur?.artist, cover: cur && coverOf(cur) ? coverUrl(coverOf(cur)) : null, palette: cur && coverOf(cur) ? paletteNow(coverOf(cur)) : null });
+  const onCancel = e => { e.preventDefault(); close(); };
+  const close = openVisualizer(d, audio, info, { icon, haptic, onClose() { d.removeEventListener('cancel', onCancel); if (fp?.d === d) fp.viz = null; } });
+  d.addEventListener('cancel', onCancel);
+  d.addEventListener('close', () => close(), { once: true });
+  fp.viz = close;
+}
+// a cover's colours if they've been worked out already (they're fetched in the background otherwise)
+const paletteSeen = new Map();
+const paletteNow = key => { if (!paletteSeen.has(key)) { paletteSeen.set(key, null); coverPalette(key).then(p => paletteSeen.set(key, p), () => {}); } return paletteSeen.get(key); };
 function drawFullPlayer() {
   if (!fp || !cur) return;
   const t = cur, art = coverOf(t), playing = !audio.paused;
@@ -2416,6 +2431,7 @@ function drawFullPlayer() {
       repeatBtn('')),
     h('div', { className: 'fp-bottom' },
       h('button', { className: 'icon-btn', 'aria-label': 'Up next', title: 'Up next', onclick: queueDialog }, icon('queue', 20)),
+      h('button', { className: 'icon-btn', 'aria-label': 'Visualizer', title: 'Visualizer', onclick: showVisualizer }, icon('sparkle', 20)),
       canEdit(t.project_id) && h('button', { className: 'icon-btn', 'aria-label': 'Details', title: 'Details', onclick: () => detailsDialog(trackOf(t.id) || t) }, icon('info', 20)),
       !canEdit(t.project_id) && canComment(t.project_id) && h('button', { className: 'icon-btn', 'aria-label': 'Comments', title: 'Comments', onclick: () => commentsDialog(t) }, icon('comment', 20)),
       !isShared(t.project_id) && h('button', { className: 'icon-btn', 'aria-label': 'Share', title: 'Share', onclick: () => shareDialog('track', t.id, t.name) }, icon('share', 20)),
