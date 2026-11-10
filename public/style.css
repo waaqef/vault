@@ -735,6 +735,14 @@ body.bulk-open #main { padding-bottom: 120px; }
 /* forms */
 dialog textarea { font-family: var(--sans); font-size: 14px; color: var(--fg); border-radius: 12px; padding: 10px 12px; resize: vertical; min-height: 96px; line-height: 1.45; }
 .form-err { margin: 0; color: var(--danger); font-size: 13px; min-height: 1em; }
+/* a field that was missed or is wrong (see showMissing in app.js) */
+input.invalid, select.invalid, textarea.invalid { box-shadow: 0 0 0 1.5px #ff6b63, 0 0 0 5px rgba(255,107,99,.16) !important; border-color: transparent !important; }
+input[type=checkbox].invalid { outline: 2px solid #ff6b63; outline-offset: 2px; box-shadow: none !important; }
+label:has(> .invalid) { color: #ff9a92; }
+.field-note { display: block; margin: -2px 0 2px; color: #ff8a80; font-size: 12px; text-align: left; animation: fade .2s ease; }
+.nudge { animation: nudge .38s cubic-bezier(.36,.07,.19,.97); }
+@keyframes nudge { 20%, 60% { translate: -4px 0; } 40%, 80% { translate: 4px 0; } }
+@media (prefers-reduced-motion: reduce) { .nudge { animation: none; } }
 
 /* iPhone shortcut instructions */
 .sc-steps { margin: 0; padding-left: 20px; display: grid; gap: 10px; font-size: 14px; color: var(--fg-2); }

@@ -5,13 +5,13 @@ import { decodeAudio, bpmKeyOf, parseName } from './detect.js';
 import { peaksOf, waveSvg } from './wave.js';
 import { makeZip, safeName } from './zip.js';
 
-const APP_VERSION = '[vault] v2.8.1'; // shown in Settings and sent with bug reports
+const APP_VERSION = '[vault] v2.8.2'; // shown in Settings and sent with bug reports
 // ---- helpers ------------------------------------------------------------------
 const $ = (s, el = document) => el.querySelector(s);
 function h(tag, attrs = {}, ...kids) {
   const el = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
-    if (k === 'onsubmit') el.addEventListener('submit', sendOnce(el, v));
+    if (k === 'onsubmit') { el.noValidate = true; el.addEventListener('submit', sendOnce(el, v)); } // the app shows what's missing itself
     else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
     else if (k === 'style' && typeof v === 'object') for (const [p, x] of Object.entries(v)) p.startsWith('--') ? el.style.setProperty(p, x) : (el.style[p] = x);
     else if (k in el && k !== 'list') el[k] = v;
@@ -22,11 +22,43 @@ function h(tag, attrs = {}, ...kids) {
 // Forms: while one is being sent its buttons are switched off, so a double tap can't send it twice.
 const sendOnce = (form, send) => async function (e) {
   if (form.busy) return e.preventDefault();
+  if (!form.checkValidity()) { e.preventDefault(); return showMissing(form); }
   form.busy = true;
   const btns = [...form.querySelectorAll('button:not([type=button])')].filter(b => !b.disabled);
   btns.forEach(b => { b.disabled = true; });
   try { await send.call(form, e); } finally { form.busy = false; btns.forEach(b => { b.disabled = false; }); }
 };
+// A form sent with something missing or wrong: each such field gets a red outline and a short note under it, and the
+// first one is brought into view. The note goes as soon as the field is changed.
+function markField(el, msg) {
+  el.classList.add('invalid');
+  el.setAttribute('aria-invalid', 'true');
+  const anchor = el.closest('label') || el;
+  let note = anchor.nextElementSibling?.classList.contains('field-note') ? anchor.nextElementSibling : null;
+  if (!note) { note = h('small', { className: 'field-note', role: 'alert' }); anchor.after(note); }
+  note.textContent = msg;
+  const clear = () => { el.classList.remove('invalid'); el.removeAttribute('aria-invalid'); note.remove(); };
+  el.addEventListener(el.type === 'checkbox' ? 'change' : 'input', clear, { once: true });
+}
+function whatsWrong(el) {
+  const v = el.validity;
+  if (el.type === 'checkbox') return 'Tick this to continue';
+  if (v.valueMissing) return 'Fill this in';
+  if (v.tooShort) return `Use at least ${el.minLength} characters`;
+  if (v.patternMismatch) return el.autocomplete === 'username' ? 'Only letters, numbers, dots, dashes and underscores' : "That doesn't look right";
+  if (v.rangeUnderflow || v.rangeOverflow) return `Between ${el.min} and ${el.max}`;
+  if (v.typeMismatch) return "That doesn't look right";
+  return el.validationMessage || "That doesn't look right";
+}
+function showMissing(form) {
+  const bad = [...form.elements].filter(el => el.willValidate && !el.checkValidity());
+  bad.forEach(el => markField(el, whatsWrong(el)));
+  const first = bad[0];
+  if (!first) return;
+  (first.closest('label') || first).scrollIntoView({ block: 'center', behavior: 'smooth' });
+  first.focus({ preventScroll: true });
+  first.classList.remove('nudge'); void first.offsetWidth; first.classList.add('nudge');
+}
 // Like replaceChildren, but accepts nested arrays and skips null/false (for `cond && el`).
 function fill(el, ...kids) { el.replaceChildren(...kids.flat(9).filter(k => k != null && k !== false)); }
 const fmtTime = s => (s == null || !isFinite(s) ? '–' : `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`);
@@ -285,7 +317,7 @@ function showLogin() {
       window.turnstile.render(check, { sitekey: c.turnstile, theme: 'dark', callback: t => { human = t; }, 'expired-callback': () => { human = ''; } });
     }).catch(() => {});
     fill(box, h('div', { className: 'brandmark' }, '[make an account]'), form(async () => {
-      if (pw.value !== again.value) throw new Error("The passwords don't match.");
+      if (pw.value !== again.value) return markField(again, "This doesn't match the password above");
       try { await api('/signup', { method: 'POST', body: { username: user.value.trim(), display_name: shown.value.trim(), password: pw.value, avatar, turnstile: human, agree: agree.checked } }); }
       catch (x) { if (window.turnstile && check.firstChild) { window.turnstile.reset(check); human = ''; } throw x; }
       history.replaceState(null, '', '/library' + location.search.replace(/[?&]signup=1/, '').replace(/^&/, '?'));
