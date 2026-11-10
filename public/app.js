@@ -1,11 +1,11 @@
 import { MAX, ACCEPT_AUDIO, ACCEPT_IMAGE, kindOf, extForType } from './types.js';
 import { icon } from './icons.js';
 import { settings, setSetting, ACCENTS } from './settings.js';
-import { decodeAudio, bpmKeyOf, parseName } from './detect.js';
+import { decodeAudio, bpmKeyOf, parseName, trackInfo } from './detect.js';
 import { peaksOf, waveSvg } from './wave.js';
 import { makeZip, safeName } from './zip.js';
 
-const APP_VERSION = '[vault] v3.2'; // shown in Settings and sent with bug reports
+const APP_VERSION = '[vault] v3.3'; // shown in Settings and sent with bug reports
 // ---- helpers ------------------------------------------------------------------
 const $ = (s, el = document) => el.querySelector(s);
 function h(tag, attrs = {}, ...kids) {
@@ -563,23 +563,25 @@ function renderMain() {
   // Play / Shuffle / Rearrange / Select, or "Done" while rearranging or selecting.
   const busy = S.arrange || S.select;
   const labelled = (ic, text) => [icon(ic, 16), h('span', { className: 'lbl-sm' }, text)];
+  const iconAction = (ic, label, run) => h('button', { className: 'icon-btn act-ic', 'aria-label': label, title: label, onclick: run }, icon(ic, 18));
   const actions = [
     S.arrange ? h('button', { className: 'btn primary', onclick: () => { S.arrange = false; renderMain(); } }, icon('check', 16), 'Done')
       : S.select ? h('button', { className: 'btn primary', onclick: () => { S.select = null; renderMain(); } }, icon('check', 16), 'Done')
         : list.length > 0 && h('button', { className: 'btn primary', onclick: () => playList(list, 0, { shuffle: false }) }, icon('play', 14), 'Play'),
     !busy && list.length > 1 && h('button', { className: 'btn', 'aria-label': 'Shuffle', onclick: () => playList(list, Math.floor(Math.random() * list.length), { shuffle: true }) }, labelled('shuffle', 'Shuffle')),
-    (p || pl) && !ro && !busy && list.length > 1 && h('button', { className: 'btn', 'aria-label': 'Rearrange', onclick: () => {
-      S.arrange = true;
-      if (S.projectSort !== 'manual') setSort('manual');
-      renderMain();
-    } }, labelled('grip', 'Rearrange')),
-    !shared && !busy && list.length > 0 && h('button', { className: 'btn', 'aria-label': 'Select tracks', onclick: () => { S.select = new Set(); renderMain(); } }, labelled('check', 'Select')),
     S.arrange && h('span', { className: 'mono arrange-hint' }, '[drag the dots to reorder]'),
     S.select && h('span', { className: 'mono arrange-hint' }, '[tap tracks to select]'),
     p && !shared && !busy && h('button', { className: 'btn', 'aria-label': 'Share', onclick: () => shareDialog('project', p.id, p.name) }, labelled('share', 'Share')),
-    p && !busy && h('button', { className: 'icon-btn', style: { background: 'var(--fill-2)' }, 'aria-label': 'Project options', onclick: () => projectMenu(p) }, icon('more', 18)),
     pl && !busy && list.length > 0 && h('button', { className: 'btn', 'aria-label': 'Share', onclick: () => shareDialog('playlist', pl.id, pl.name) }, labelled('share', 'Share')),
-    pl && !busy && h('button', { className: 'icon-btn', style: { background: 'var(--fill-2)' }, 'aria-label': 'Playlist options', onclick: () => playlistMenu(pl) }, icon('more', 18)),
+    // the less-used ones as icons, next to the ⋯ menu
+    (p || pl) && !ro && !busy && list.length > 1 && iconAction('grip', 'Rearrange', () => {
+      S.arrange = true;
+      if (S.projectSort !== 'manual') setSort('manual');
+      renderMain();
+    }),
+    !shared && !busy && list.length > 0 && iconAction('check', 'Select tracks', () => { S.select = new Set(); renderMain(); }),
+    p && !busy && iconAction('more', 'Project options', () => projectMenu(p)),
+    pl && !busy && iconAction('more', 'Playlist options', () => playlistMenu(pl)),
   ];
   const dur = list.reduce((s, t) => s + (t.duration || 0), 0);
   const count = `${list.length} ${list.length === 1 ? 'track' : 'tracks'} · ${fmtTime(dur)}${fc ? ' · filtered' : ''}`;
@@ -853,7 +855,7 @@ function renderList(animate = false) {
     },
     // Selecting: a tick box. Inside a project: the track number (the playing one turns into bars). Elsewhere: the cover.
     S.select ? h('span', { className: 'sel-box' }, icon('check', 14))
-      : p ? h('span', { className: 'tnum num' }, h('b', {}, i + 1), h('span', { className: 'bars' }, h('i'), h('i'), h('i')))
+      : p ? h('span', { className: 'tnum num' }, h('span', { className: 'bars' }, h('i'), h('i'), h('i')))
         : thumb(coverOf(t), 'thumb', h('span', { className: 'bars' }, h('i'), h('i'), h('i'))),
     h('div', { style: { minWidth: 0 } },
       h('div', { className: 'name' }, t.name),
@@ -1271,16 +1273,21 @@ const fmtSize = b => (b >= 1e9 ? (b / 1e9).toFixed(2) + ' GB' : b >= 1e6 ? (b / 
 const fmtEta = s => (!isFinite(s) || s <= 0 ? '' : s < 60 ? `~${Math.ceil(s)}s left` : s < 3600 ? `~${Math.round(s / 60)} min left` : `~${(s / 3600).toFixed(1)} h left`);
 
 // Adds files to the queue. Resolves once all of them have finished (uploaded, failed or skipped).
-function uploadTracks(files, project_id, folder = projectOf(project_id)?.name || '') {
+// Each file's title, artist, producer and track number are read first (its tags, else its name), and an album's
+// worth of numbered files goes in in track order, whatever order they were picked or dropped in.
+async function uploadTracks(files, project_id, folder = projectOf(project_id)?.name || '') {
+  const infos = await Promise.all(files.map(f => (kindOf(f.name) === 'audio' ? trackInfo(f).catch(() => null) : null)));
+  const order = files.map((file, i) => ({ file, info: infos[i], i }));
+  if (order.filter(x => x.info?.track != null).length > 1) order.sort((a, b) => (a.info?.track ?? 1e9) - (b.info?.track ?? 1e9) || a.i - b.i);
   const seen = new Map(S.tracks.map(t => [`${t.name.toLowerCase()}|${t.size}`, projectOf(t.project_id)?.name || 'your library']));
-  for (const j of Q.jobs) if (j.status !== 'skipped') seen.set(`${baseName(j.file.name).toLowerCase()}|${j.size}`, j.folder || 'this upload');
-  const jobs = files.map(file => {
+  for (const j of Q.jobs) if (j.status !== 'skipped') seen.set(`${(j.info?.title || baseName(j.file.name)).toLowerCase()}|${j.size}`, j.folder || 'this upload');
+  const jobs = order.map(({ file, info }) => {
     const bad = kindOf(file.name) !== 'audio' ? 'Not an audio file' : file.size > MAX.audio ? 'Too big (over 1 GB)' : null;
-    const sig = `${baseName(file.name).toLowerCase()}|${file.size}`;
-    const dupOf = !bad && settings.skipDups ? seen.get(sig) : null;
-    if (!bad) seen.set(sig, folder || 'this upload');
+    const sig = `${baseName(file.name).toLowerCase()}|${file.size}`, named = info?.title ? `${info.title.toLowerCase()}|${file.size}` : sig;
+    const dupOf = !bad && settings.skipDups ? seen.get(sig) || seen.get(named) : null;
+    if (!bad) seen.set(named, folder || 'this upload');
     const error = bad || (dupOf ? `Already in ${dupOf}` : null);
-    return { file, project_id, folder, size: file.size, loaded: 0, status: error ? 'skipped' : 'queued', error, dup: !!dupOf, phase: '', row: null, sig: '' };
+    return { file, info, project_id, folder, size: file.size, loaded: 0, status: error ? 'skipped' : 'queued', error, dup: !!dupOf, phase: '', row: null, sig: '' };
   });
   const finished = Promise.all(jobs.map(j => new Promise(res => { j.done = res; if (j.status === 'skipped') res(); })));
   Q.jobs.push(...jobs);
@@ -1303,7 +1310,9 @@ async function pump() {
       const { bpm, key, peaks } = await analysing;
       job.found = [bpm && bpm + ' BPM', key].filter(Boolean).join(' · ');
       job.phase = 'Saving'; drawQueue();
-      await api('/tracks', { method: 'POST', body: { project_id: job.project_id, name: baseName(job.file.name), file_key, duration, bpm, musical_key: key, peaks, artist: settings.artist } });
+      const info = job.info || {};
+      await api('/tracks', { method: 'POST', body: { project_id: job.project_id, name: info.title || baseName(job.file.name), file_key, duration, bpm, musical_key: key, peaks,
+        artist: info.artist || settings.artist, tags: info.prod ? `prod. ${info.prod}` : '' } });
       job.status = 'done';
       Q.refresh ||= setTimeout(() => { Q.refresh = 0; load(); }, 2500); // refresh the library every few seconds, not after every file
     } catch (e) {

@@ -178,3 +178,30 @@ console.log('zip ok');
   await assert.rejects(d.unseal('other', sealed));
   console.log('drive ok');
 }
+
+// File names and tags on import: title, track number, producer, artist.
+{
+  const { parseTitle, readTags, trackInfo } = await import('./public/detect.js');
+  const cases = [
+    ['03 - Like Lil Mexico (prod. Che).mp3', '', { title: 'Like Lil Mexico', track: 3, prod: 'Che' }],
+    ['01. 2sday [prod by CXO].wav', '', { title: '2sday', track: 1, prod: 'CXO' }],
+    ['Dmx prod. Rok.m4a', '', { title: 'Dmx', track: null, prod: 'Rok' }],
+    ['50 Cent - Song.mp3', '', { title: '50 Cent - Song', track: null, prod: null }],
+    ['150 e minor.wav', '', { title: '150 e minor', track: null, prod: null }],
+    ['2sday.mp3', '', { title: '2sday', track: null, prod: null }],
+    ['Che - Los Santos.mp3', 'Che', { title: 'Los Santos', track: null, prod: null }],
+    ['Track 4 - Og Ginobili.mp3', '', { title: 'Og Ginobili', track: 4, prod: null }],
+    ['Product launch.mp3', '', { title: 'Product launch', track: null, prod: null }],
+    ['05_bounce_v2 (prod. Che x CXO).wav', '', { title: 'bounce v2', track: 5, prod: 'Che x CXO' }],
+  ];
+  for (const [name, artist, want] of cases) assert.deepEqual(parseTitle(name, artist), want, name);
+  // an MP3 with an ID3v2.3 tag: title, artist, track "2/9", a TXXX producer
+  const frame = (id, text) => { const body = Buffer.concat([Buffer.from([3]), Buffer.from(text, 'utf8')]); const h = Buffer.alloc(10); h.write(id, 0); h.writeUInt32BE(body.length, 4); return Buffer.concat([h, body]); };
+  const frames = Buffer.concat([frame('TIT2', 'Track 02'), frame('TPE1', 'Che'), frame('TRCK', '2/9'), frame('TXXX', 'PRODUCER\0CXO')]);
+  const size = frames.length, head = Buffer.from([0x49, 0x44, 0x33, 3, 0, 0, (size >> 21) & 127, (size >> 14) & 127, (size >> 7) & 127, size & 127]);
+  const mp3 = new File([head, frames, Buffer.from([0xff, 0xfb, 0x90, 0x64])], 'Track 02.mp3');
+  assert.deepEqual(await readTags(mp3), { title: 'Track 02', artist: 'Che', track: 2, producer: 'CXO' });
+  const info = await trackInfo(new File([head, frames], '02 - 2sday.mp3'));
+  assert.deepEqual(info, { title: '2sday', artist: 'Che', prod: 'CXO', track: 2 }, 'the name wins for the title; tags fill in the rest');
+  console.log('import info ok');
+}
