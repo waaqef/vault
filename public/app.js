@@ -1095,8 +1095,10 @@ function firstProject() {
     const cover = h('button', { type: 'button', className: 'first-cover', 'aria-label': 'Choose cover art', async onclick() {
       const [f] = splitAccepted(await pickFiles(ACCEPT_IMAGE, false), 'cover');
       if (!f) return;
-      file = f;
-      cover.style.backgroundImage = `url("${URL.createObjectURL(f)}")`;
+      const cropped = await cropCover(f).catch(e => (oops(e), null));
+      if (!cropped) return;
+      file = cropped;
+      cover.style.backgroundImage = `url("${URL.createObjectURL(cropped)}")`;
       cover.classList.add('has');
     } }, icon('plus', 22), h('span', { className: 'mono' }, '[cover art]'));
     const name = h('input', { type: 'text', required: true, maxLength: 200, placeholder: 'e.g. Summer beats', 'aria-label': 'Project name' });
@@ -1107,7 +1109,7 @@ function firstProject() {
       btn.disabled = true; err.textContent = '';
       try {
         const { id } = await api('/projects', { method: 'POST', body: { name: name.value.trim() } });
-        if (file) await api(`/projects/${id}`, { method: 'PATCH', body: { cover: await uploadFile(await toJpeg(file)) } }).catch(oops);
+        if (file) await api(`/projects/${id}`, { method: 'PATCH', body: { cover: await uploadFile(file) } }).catch(oops);
         S.view = { type: 'project', id }; store.set('view', S.view);
         d.close(); await load(); res(id);
       } catch (x) { err.textContent = x.message; btn.disabled = false; }
@@ -1359,32 +1361,130 @@ const loadImg = blob => new Promise((res, rej) => {
   img.src = u;
 });
 const loadScript = src => new Promise((res, rej) => document.head.append(h('script', { src, onload: res, onerror: rej })));
-async function toJpeg(file) {
-  let img;
-  try { img = await loadImg(file); } catch {
+async function decodeImage(file) {
+  try { return await loadImg(file); } catch {
     if (!/\.(heic|heif)$/i.test(file.name)) throw new Error(`${file.name} couldn't be read as an image`);
     if (!window.heic2any) await loadScript('/lib/heic2any.min.js');
-    img = await loadImg(await window.heic2any({ blob: file, toType: 'image/jpeg' }));
+    return loadImg(await window.heic2any({ blob: file, toType: 'image/jpeg' }));
   }
+}
+async function toJpeg(file) {
+  const img = await decodeImage(file);
   const s = Math.min(1, 1000 / Math.max(img.naturalWidth, img.naturalHeight));
   const c = h('canvas', { width: Math.round(img.naturalWidth * s), height: Math.round(img.naturalHeight * s) });
   c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
   const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.88));
   return new File([blob], 'cover.jpg', { type: 'image/jpeg' });
 }
-async function setCover(table, item, file) {
+// auto: no cropping step (a folder dropped with its artwork inside)
+async function setCover(table, item, file, { auto = false } = {}) {
   if (!file) {
     const files = splitAccepted(await pickFiles(ACCEPT_IMAGE, false), 'cover');
     if (!files.length) return;
     file = files[0];
   }
+  let jpeg;
+  try { jpeg = auto ? await toJpeg(file) : await cropCover(file); } catch (e) { return oops(e); }
+  if (!jpeg) return; // cancelled
   const t = toast('Uploading cover…', { ms: 0 });
   try {
-    const cover = await uploadFile(await toJpeg(file), undefined, table === 'projects' ? item.id : item.project_id);
+    const cover = await uploadFile(jpeg, undefined, table === 'projects' ? item.id : item.project_id);
     await api(`/${table}/${item.id}`, { method: 'PATCH', body: { cover } });
     await load();
   } catch (e) { oops(e); }
   t.remove();
+}
+
+// Crop & adjust a cover before it's uploaded: drag to move, pinch / scroll / slider to zoom, rotate, and a brightness
+// and contrast touch-up. Reset puts it all back. Resolves with a square 1000px JPEG, or null if cancelled.
+async function cropCover(file) {
+  let img = await decodeImage(file);
+  const OUT = 1000, V = Math.min(320, innerWidth - 80); // the square you see, in CSS px
+  const st = { z: 1, x: 0, y: 0, light: 0, contrast: 0 };
+  let base = 1;
+  const frame = h('div', { className: 'crop-frame', style: { width: V + 'px', height: V + 'px' } });
+  const pic = h('canvas', { className: 'crop-img' });
+  frame.append(pic, h('div', { className: 'crop-grid', 'aria-hidden': 'true' }));
+  const zoom = h('input', { type: 'range', min: 1, max: 4, step: 0.01, value: 1, 'aria-label': 'Zoom', oninput() { zoomTo(+this.value); } });
+  const light = h('input', { type: 'range', min: -50, max: 50, step: 1, value: 0, 'aria-label': 'Brightness', oninput() { st.light = +this.value; paint(); } });
+  const contrast = h('input', { type: 'range', min: -50, max: 50, step: 1, value: 0, 'aria-label': 'Contrast', oninput() { st.contrast = +this.value; paint(); } });
+  const filter = () => `brightness(${1 + st.light / 100}) contrast(${1 + st.contrast / 100})`;
+  const size = () => [img.naturalWidth * base * st.z, img.naturalHeight * base * st.z];
+  // keep the picture covering the whole square
+  const clamp = () => { const [w, hh] = size(); st.x = Math.min(0, Math.max(V - w, st.x)); st.y = Math.min(0, Math.max(V - hh, st.y)); };
+  function paint() {
+    clamp();
+    const [w, hh] = size();
+    Object.assign(pic.style, { width: w + 'px', height: hh + 'px', transform: `translate(${st.x}px, ${st.y}px)`, filter: filter() });
+    zoom.value = st.z; light.value = st.light; contrast.value = st.contrast;
+    [zoom, light, contrast].forEach(syncRange);
+  }
+  // zoom around a point of the square (its centre unless a pinch or the mouse says otherwise)
+  function zoomTo(z, cx = V / 2, cy = V / 2) {
+    z = Math.min(4, Math.max(1, z));
+    const k = z / st.z;
+    st.x = cx - (cx - st.x) * k; st.y = cy - (cy - st.y) * k; st.z = z;
+    paint();
+  }
+  function useImage(src) {
+    img = src;
+    pic.width = img.naturalWidth || img.width; pic.height = img.naturalHeight || img.height;
+    if (!img.naturalWidth) { img.naturalWidth = img.width; img.naturalHeight = img.height; }
+    pic.getContext('2d').drawImage(img, 0, 0);
+    base = V / Math.min(img.naturalWidth, img.naturalHeight);
+    const [w, hh] = [img.naturalWidth * base * st.z, img.naturalHeight * base * st.z];
+    st.x = (V - w) / 2; st.y = (V - hh) / 2;
+    paint();
+  }
+  function reset() { Object.assign(st, { z: 1, light: 0, contrast: 0 }); useImage(original); }
+  function rotate() {
+    const c = h('canvas', { width: img.naturalHeight, height: img.naturalWidth }), g = c.getContext('2d');
+    g.translate(c.width, 0); g.rotate(Math.PI / 2); g.drawImage(img, 0, 0);
+    Object.assign(c, { naturalWidth: c.width, naturalHeight: c.height });
+    st.z = 1; useImage(c);
+  }
+  const original = img;
+  // drag to move; two fingers pinch to zoom
+  const pts = new Map();
+  let last = null;
+  frame.addEventListener('pointerdown', e => { frame.setPointerCapture(e.pointerId); pts.set(e.pointerId, [e.clientX, e.clientY]); last = null; });
+  frame.addEventListener('pointermove', e => {
+    if (!pts.has(e.pointerId)) return;
+    const prev = pts.get(e.pointerId); pts.set(e.pointerId, [e.clientX, e.clientY]);
+    if (pts.size === 1) { st.x += e.clientX - prev[0]; st.y += e.clientY - prev[1]; return paint(); }
+    const [a, b] = [...pts.values()], d = Math.hypot(a[0] - b[0], a[1] - b[1]), r = frame.getBoundingClientRect();
+    if (last) zoomTo(st.z * (d / last), (a[0] + b[0]) / 2 - r.left, (a[1] + b[1]) / 2 - r.top);
+    last = d;
+  });
+  const up = e => { pts.delete(e.pointerId); last = null; };
+  frame.addEventListener('pointerup', up); frame.addEventListener('pointercancel', up);
+  frame.addEventListener('wheel', e => { e.preventDefault(); const r = frame.getBoundingClientRect(); zoomTo(st.z * Math.exp(-e.deltaY * 0.0015), e.clientX - r.left, e.clientY - r.top); }, { passive: false });
+  frame.addEventListener('dblclick', () => zoomTo(st.z > 1.5 ? 1 : 2));
+
+  const slider = (label, input) => h('label', { className: 'crop-slider' }, h('span', { className: 'mono' }, label), input);
+  return new Promise(res => {
+    let done = false;
+    const d = dialog(h('div', { className: 'stack crop' },
+      h('h2', {}, 'Crop cover'),
+      frame,
+      h('small', { className: 'muted', style: { textAlign: 'center' } }, matchMedia('(pointer: coarse)').matches ? 'Drag to move · pinch to zoom' : 'Drag to move · scroll to zoom'),
+      slider('[zoom]', zoom), slider('[brightness]', light), slider('[contrast]', contrast),
+      h('div', { className: 'btns', style: { justifyContent: 'flex-start', marginTop: 0 } },
+        h('button', { type: 'button', className: 'btn', onclick: rotate }, icon('undo', 15), 'Rotate'),
+        h('button', { type: 'button', className: 'btn ghost', onclick: reset }, 'Reset')),
+      h('div', { className: 'btns' },
+        h('button', { type: 'button', className: 'btn ghost', onclick: () => d.close() }, 'Cancel'),
+        h('button', { type: 'button', className: 'btn primary', async onclick() {
+          // the square you see, cut out of the full-size picture
+          const k = base * st.z, c = h('canvas', { width: OUT, height: OUT }), g = c.getContext('2d');
+          g.filter = filter();
+          g.drawImage(img, -st.x / k, -st.y / k, V / k, V / k, 0, 0, OUT, OUT);
+          const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.9));
+          done = true; res(new File([blob], 'cover.jpg', { type: 'image/jpeg' })); d.close();
+        } }, 'Use cover'))), { className: 'settings-dlg crop-dlg' });
+    d.addEventListener('close', () => { if (!done) res(null); });
+    useImage(img);
+  });
 }
 
 // Drag and drop: loose files go to the current project; each dropped folder becomes a project.
@@ -1456,7 +1556,7 @@ async function handleDrop(dt, projectId, at) {
       const { id } = await api('/projects', { method: 'POST', body: { name: f.name, folder_id: folderId } });
       const art = f.files.find(x => kindOf(x.name) === 'cover');
       // Everything else (including other images, docs, etc.) goes in the queue; non-audio shows up as "skipped".
-      waits.push(uploadTracks(f.files.filter(x => x !== art), id, f.name).then(() => art && setCover('projects', { id }, art)));
+      waits.push(uploadTracks(f.files.filter(x => x !== art), id, f.name).then(() => art && setCover('projects', { id }, art, { auto: true })));
     }
   } catch (e) { oops(e); }
   await Promise.all(waits);
@@ -2514,7 +2614,7 @@ async function settingsDialog(only) {
         h('button', { className: 'btn danger', onclick: () => { d.close(); deleteAccountDialog(); } }, 'Delete'))),
     !only && h('div', { className: 'set-sec' }, h('h3', {}, '[support]'),
       row('Support [vault]', 'Free, no ads. Tips help keep it that way.', h('a', { className: 'btn', href: 'https://ko-fi.com/choseroxy', target: '_blank', rel: 'noopener' }, 'Tip ☕'))),
-    h('div', { className: 'btns' }, h('span', { className: 'mono', style: { marginRight: 'auto', color: 'var(--fg-3)', alignSelf: 'center' } }, '[vault] v2.5.3'),
+    h('div', { className: 'btns' }, h('span', { className: 'mono', style: { marginRight: 'auto', color: 'var(--fg-3)', alignSelf: 'center' } }, '[vault] v2.6'),
       h('button', { className: 'btn primary', onclick: () => d.close() }, 'Done'))), { className: 'settings-dlg' });
   if (only) d.querySelectorAll('.set-sec').forEach(sec => sec.querySelector('h3').textContent !== `[${only}]` && sec.remove());
   api('/versions/old').then(({ count, size }) => {

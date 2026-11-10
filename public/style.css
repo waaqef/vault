@@ -199,6 +199,16 @@ body.paused .bars i { animation-play-state: paused; }
 .empty .disc { width: 64px; height: 64px; margin-bottom: 10px; animation: spin 14s linear infinite; }
 .empty b { color: var(--fg); font-weight: 500; font-size: 15px; }
 .empty.boot { border: 0; margin: 18vh 28px 0; }
+/* cover cropper */
+.crop { justify-items: center; }
+.crop-frame { position: relative; overflow: hidden; border-radius: 16px; background: #000; touch-action: none; cursor: grab; box-shadow: inset 0 0 0 1px var(--line), 0 14px 40px rgba(0,0,0,.45); }
+.crop-frame:active { cursor: grabbing; }
+.crop-img { position: absolute; left: 0; top: 0; transform-origin: 0 0; user-select: none; pointer-events: none; }
+.crop-grid { position: absolute; inset: 0; pointer-events: none; border-radius: inherit;
+  background: linear-gradient(90deg, transparent calc(33.33% - .5px), rgba(255,255,255,.22) 0 calc(33.33% + .5px), transparent 0 calc(66.66% - .5px), rgba(255,255,255,.22) 0 calc(66.66% + .5px), transparent 0),
+    linear-gradient(transparent calc(33.33% - .5px), rgba(255,255,255,.22) 0 calc(33.33% + .5px), transparent 0 calc(66.66% - .5px), rgba(255,255,255,.22) 0 calc(66.66% + .5px), transparent 0); }
+.crop-slider { width: 100%; display: grid; grid-template-columns: 96px minmax(0, 1fr); align-items: center; gap: 10px; }
+.crop .btns { width: 100%; }
 .notify-ask { text-align: center; justify-items: center; max-width: 340px; }
 .notify-ask .btns { justify-content: center; width: 100%; }
 .notify-ic { width: 56px; height: 56px; border-radius: 18px; display: grid; place-items: center; color: var(--on-accent, #141414); background: var(--user-accent); box-shadow: 0 10px 30px rgba(0,0,0,.35); }
