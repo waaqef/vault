@@ -2526,7 +2526,7 @@ async function settingsDialog(only) {
         h('button', { className: 'btn danger', onclick: () => { d.close(); deleteAccountDialog(); } }, 'Delete'))),
     !only && h('div', { className: 'set-sec' }, h('h3', {}, '[support]'),
       row('Support [vault]', 'Free, no ads. Tips help keep it that way.', h('a', { className: 'btn', href: 'https://ko-fi.com/choseroxy', target: '_blank', rel: 'noopener' }, 'Tip ☕'))),
-    h('div', { className: 'btns' }, h('span', { className: 'mono', style: { marginRight: 'auto', color: 'var(--fg-3)', alignSelf: 'center' } }, '[vault] v2.4.1'),
+    h('div', { className: 'btns' }, h('span', { className: 'mono', style: { marginRight: 'auto', color: 'var(--fg-3)', alignSelf: 'center' } }, '[vault] v2.4.2'),
       h('button', { className: 'btn primary', onclick: () => d.close() }, 'Done'))), { className: 'settings-dlg' });
   if (only) d.querySelectorAll('.set-sec').forEach(sec => sec.querySelector('h3').textContent !== `[${only}]` && sec.remove());
   api('/versions/old').then(({ count, size }) => {
@@ -3057,16 +3057,27 @@ document.addEventListener('touchmove', e => { if (e.touches.length > 1) e.preven
 // In the [vault] iPhone app (ios-app/), haptics go to the native vibration engine instead, which works any time.
 const nativeHaptics = window.webkit?.messageHandlers?.haptic;
 const canVibrate = !!nativeHaptics || typeof navigator.vibrate === 'function';
+let lastHaptic = 0, inHaptic = false;
 export function haptic(style = 'light') {
+  if (performance.now() - lastHaptic < 60) return; // one tap, one tick
+  lastHaptic = performance.now();
   try {
     if (nativeHaptics) return void nativeHaptics.postMessage(style);
     if (canVibrate) return void navigator.vibrate(8);
     const label = document.createElement('label'), input = document.createElement('input');
     input.type = 'checkbox'; input.setAttribute('switch', ''); label.append(input);
     label.setAttribute('aria-hidden', 'true'); label.style.display = 'none';
-    document.head.append(label); label.click(); label.remove();
-  } catch {}
+    // inside the open pop-up when there is one: everything outside a pop-up is switched off, and wouldn't tick
+    const open = [...document.querySelectorAll('dialog[open]')].pop();
+    inHaptic = true;
+    (open || document.body).append(label); label.click(); label.remove();
+  } catch {} finally { inHaptic = false; }
 }
+// Every tap on something tappable gives a light tick on phones (buttons, tracks, menu items, switches, links).
+document.addEventListener('click', e => {
+  if (inHaptic || !e.isTrusted || !matchMedia('(pointer: coarse)').matches) return;
+  if (e.target.closest?.('button, [role=button], [role=tab], [role=radio], a, select, summary, input[type=checkbox], input[type=range], .trow[data-id], .nav, .card, .tcard')) haptic();
+}, true);
 // For moments in the middle of a gesture: only Android can tap then.
 const hapticMid = () => { if (canVibrate) haptic(); };
 const SWIPE_ACT = 72, SWIPE_FAR = 168;
@@ -3139,7 +3150,7 @@ document.addEventListener('touchend', endSwipe); document.addEventListener('touc
 
 // Phones: tapping anywhere outside the open sidebar just closes it (and doesn't press whatever is underneath).
 document.addEventListener('click', e => {
-  if (!document.body.classList.contains('side-open') || e.target.closest('#side, #menu-btn, dialog, #toasts')) return;
+  if (inHaptic || !document.body.classList.contains('side-open') || e.target.closest('#side, #menu-btn, dialog, #toasts')) return;
   e.preventDefault(); e.stopPropagation();
   document.body.classList.remove('side-open');
 }, true);
