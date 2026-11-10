@@ -1,5 +1,5 @@
 // The visualizer: Alchemy, after Windows Media Player's. A small 3D world that moves with the music, in the cover's
-// colours. A metronome runs at the song's BPM: every beat punches the picture (zoom, flash, a jolt to the camera),
+// colours. A metronome runs at the song's BPM: every beat gives the picture a small push (zoom, a nudge to the camera), no flashing,
 // and every 8 beats it's a random new scene (ribbons of dots, bead pillars, waveform sheets, zigzag bursts, rays,
 // rings, string art, wires with stars, a haze), with a new way the camera and trails move. Each frame is
 // drawn over the last one (slightly moved and faded), so one scene melts into the next.
@@ -126,15 +126,15 @@ export function openVisualizer(host, audio, info, { icon, haptic = () => {}, onC
     if (bpm && !audio.paused) {
       const n = Math.floor((audio.currentTime * bpm) / 60);
       if (n !== lastBeat) {
-        if (lastBeat !== null) { pulse = 1; kick = 1; if (Math.floor(n / 8) !== Math.floor(lastBeat / 8)) newScene(); }
+        if (lastBeat !== null) { pulse = 1; if (Math.floor(n / 8) !== Math.floor(lastBeat / 8)) newScene(); }
         lastBeat = n;
       }
     } else if (scene.kicks >= 8 || clock - scene.born > 20) newScene(); // no BPM saved for this song: every 8 kicks (or 20 s)
-    const sc = scene, cx = W / 2, cy = H / 2, S = Math.min(W, H) * (0.9 + pulse * 0.14 + level * 0.12);
+    const sc = scene, cx = W / 2, cy = H / 2, S = Math.min(W, H) * (0.9 + pulse * 0.07 + level * 0.12);
     const hue = sc.hue + t * 6 + bassS * 50; // which of the cover's colours, drifting slowly between them
     // a colour from the cover's palette: h picks a point along it (blending neighbouring colours), l is lightness
     const hsl = (h, l = 60, a = 1) => {
-      const L = Math.min(92, l + pulse * 18);
+      const L = Math.min(92, l); // no brightness change on the beat (flashing is hard on the eyes)
       if (!pal) return `hsla(0,0%,${L}%,${a})`;
       const n = pal.length, q = ((((h % 360) + 360) % 360) / 360) * n, k = Math.floor(q) % n, f = q - Math.floor(q), A = pal[k], B = pal[(k + 1) % n];
       let dh = B.h - A.h; if (dh > 180) dh -= 360; if (dh < -180) dh += 360;
@@ -147,18 +147,17 @@ export function openVisualizer(host, audio, info, { icon, haptic = () => {}, onC
     bg.setTransform(1, 0, 0, 1, 0, 0); bg.globalCompositeOperation = 'copy'; bg.drawImage(cv, 0, 0);
     g.fillStyle = pal ? `hsl(${pal[0].h},${Math.round(pal[0].s * 0.5)}%,4%)` : sc.bgc; g.fillRect(0, 0, W, H); // the darkest of the cover's colour
     sc.dir += dt * 0.2 * Math.sin(t * 0.13);
-    const push = sc.drift * S * (0.0045 + level * 0.006), zoom = sc.zoom + bassS * 0.02 + pulse * 0.035;
+    const push = sc.drift * S * (0.0045 + level * 0.006), zoom = sc.zoom + bassS * 0.02 + pulse * 0.018;
     g.save(); g.translate(cx + Math.cos(sc.dir) * push, cy + Math.sin(sc.dir) * push); g.rotate(sc.rot * (1 + level)); g.scale(zoom, zoom); g.translate(-cx, -cy);
     g.globalAlpha = sc.alpha;
     g.drawImage(buf, 0, 0, W, H);
     g.restore(); g.globalAlpha = 1;
     g.globalCompositeOperation = 'lighter';
-    if (pulse > 0) { g.fillStyle = hsl(hue + 90, 45, pulse * 0.1); g.fillRect(0, 0, W, H); } // a soft flash on each beat
 
     // the camera, and 3D → screen
     const sp = 1 + level * 2.5 + kick * 3;
     cam.ax += cam.vx * dt * sp; cam.ay += cam.vy * dt * sp; cam.az += cam.vz * dt * sp;
-    if (kick > 0.95) { cam.vx += rnd(-0.25, 0.25); cam.vy += rnd(-0.25, 0.25); cam.vz += rnd(-0.1, 0.1); }
+    if (pulse > 0.95 || kick > 0.95) { cam.vx += rnd(-0.25, 0.25); cam.vy += rnd(-0.25, 0.25); cam.vz += rnd(-0.1, 0.1); }
     cam.vx *= 0.995; cam.vy *= 0.995;
     const [sx, cxr, sy, cyr, sz, czr] = [Math.sin(cam.ax), Math.cos(cam.ax), Math.sin(cam.ay), Math.cos(cam.ay), Math.sin(cam.az), Math.cos(cam.az)];
     const proj = (x, y, z) => {
