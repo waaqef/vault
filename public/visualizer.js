@@ -1,7 +1,7 @@
 // The visualizer: Alchemy, after Windows Media Player's. A trippy 3D world that moves with the music, in the cover's
 // colours. A metronome runs at the song's BPM: every beat gives the picture a small push (zoom, a nudge to the camera), no flashing,
-// and every 8 beats it's a random new scene (a twisting helix, a tunnel, aurora, a spirograph, a planet of dots, a
-// galaxy, an oscilloscope shape, a rolling terrain, a kaleidoscope), with a new way the camera and trails move. Each frame is
+// and after a random 4–16 beats it morphs into a random new scene (a twisting helix, a tunnel, aurora, a spirograph, a planet of dots, a
+// galaxy, an oscilloscope shape, a hyperspace warp, a kaleidoscope), with a new way the camera and trails move. Each frame is
 // drawn over the last one (slightly moved and faded), so one scene melts into the next.
 // Tap for a new scene.
 //
@@ -37,7 +37,7 @@ const SCENES = {
   planet: () => ({ zoom: 1.006, rot: 0, drift: 0, rise: 0, alpha: 0.8 }),         // a sphere of dots, rippling with the spectrum
   galaxy: () => ({ zoom: 0.988, rot: rnd(0.008, 0.016) * pick([-1, 1]), drift: 0, rise: 0, alpha: 0.92, arms: pick([2, 3, 4]) }),
   scope: () => ({ zoom: 1.003, rot: rnd(-0.006, 0.006), drift: 0, rise: 0, alpha: 0.9, lag: Math.floor(rnd(20, 90)) }), // the sound drawn as a shape (XY)
-  terrain: () => ({ zoom: 1, rot: 0, drift: 0, rise: 0, alpha: 0.55 }),           // the spectrum as a landscape rolling towards you
+  warp: () => ({ zoom: 1.015, rot: rnd(-0.006, 0.006), drift: 0, rise: 0, alpha: 0.86 }), // stars streaking past, like hyperspace
   kaleido: () => ({ zoom: 0.985, rot: rnd(0.004, 0.01), drift: 0, rise: 0, alpha: 0.9, n: pick([6, 8, 10, 12]) }),
 };
 // points spread evenly over a sphere (for the planet)
@@ -94,13 +94,18 @@ export function openVisualizer(host, audio, info, { icon, haptic = () => {}, onC
   // the camera: it turns slowly round the scene (faster when it's loud; kicks nudge it)
   const cam = { ax: 0.4, ay: -0.3, az: 0, vx: 0, vy: 0, vz: 0 };
   const sparks = [];
-  const land = []; let landT = 0; // the terrain's rows of spectrum, newest first
+  const flyers = Array.from({ length: 360 }, () => ({ x: rnd(-1, 1), y: rnd(-1, 1), z: rnd(0.05, 1), b: Math.floor(rnd(0, 24)) })); // the warp's stars
   const stars = Array.from({ length: 700 }, () => ({ a: rnd(0, Math.PI * 2), r: rnd(0.05, 1), k: Math.floor(rnd(0, 4)) })); // the galaxy's
+  // Changing scene is a morph, not a cut: for MORPH seconds both are drawn (one fading out, one in), the trails'
+  // movement blends from one to the other, and a swirl that peaks half way melts them together.
+  const MORPH = 2.5;
+  let prevScene = null, mix = 1, swirlDir = 1;
   const newScene = () => {
     const kinds = Object.keys(SCENES).filter(k => k !== scene?.kind), kind = pick(kinds);
-    scene = { kind, ...SCENES[kind](), kicks: 0, born: performance.now() / 1000, hue: rnd(0, 360), dir: rnd(0, Math.PI * 2) };
+    prevScene = scene; mix = scene ? 0 : 1; swirlDir = pick([-1, 1]);
+    scene = { kind, ...SCENES[kind](), kicks: 0, beats: 0, length: pick([4, 8, 8, 12, 16]), born: performance.now() / 1000, hue: rnd(0, 360), dir: rnd(0, Math.PI * 2) };
     el.dataset.scene = kind; // (handy for checking what's showing)
-    cam.vx = rnd(-0.12, 0.12); cam.vy = rnd(-0.15, 0.15); cam.vz = rnd(-0.06, 0.06);
+    cam.tx = rnd(-0.12, 0.12); cam.ty = rnd(-0.15, 0.15); cam.tz = rnd(-0.06, 0.06); // the camera eases into its new turn
   };
   cv.onclick = () => { newScene(); haptic(); };
 
@@ -128,10 +133,10 @@ export function openVisualizer(host, audio, info, { icon, haptic = () => {}, onC
     if (bpm && !audio.paused) {
       const n = Math.floor((audio.currentTime * bpm) / 60);
       if (n !== lastBeat) {
-        if (lastBeat !== null) { pulse = 1; if (Math.floor(n / 8) !== Math.floor(lastBeat / 8)) newScene(); }
+        if (lastBeat !== null) { pulse = 1; if (++scene.beats >= scene.length) newScene(); } // after a random 4–16 beats
         lastBeat = n;
       }
-    } else if (scene.kicks >= 8 || clock - scene.born > 20) newScene(); // no BPM saved for this song: every 8 kicks (or 20 s)
+    } else if (scene.kicks >= scene.length || clock - scene.born > scene.length * 2.5) newScene(); // no BPM saved: that many kicks (or a while)
     const sc = scene, cx = W / 2, cy = H / 2, S = Math.min(W, H) * (0.9 + pulse * 0.07 + level * 0.12);
     const hue = sc.hue + t * 6 + bassS * 50; // which of the cover's colours, drifting slowly between them
     // a colour from the cover's palette: h picks a point along it (blending neighbouring colours), l is lightness
@@ -149,9 +154,13 @@ export function openVisualizer(host, audio, info, { icon, haptic = () => {}, onC
     bg.setTransform(1, 0, 0, 1, 0, 0); bg.globalCompositeOperation = 'copy'; bg.drawImage(cv, 0, 0);
     g.fillStyle = pal ? `hsl(${pal[0].h},${Math.round(pal[0].s * 0.5)}%,4%)` : '#05060a'; g.fillRect(0, 0, W, H); // the darkest of the cover's colour
     sc.dir += dt * 0.2 * Math.sin(t * 0.13);
-    const push = sc.drift * S * (0.0045 + level * 0.006), zoom = sc.zoom + bassS * 0.02 + pulse * 0.018;
-    g.save(); g.translate(cx + Math.cos(sc.dir) * push, cy + Math.sin(sc.dir) * push - sc.rise * S * (0.004 + level * 0.004)); g.rotate(sc.rot * (1 + level)); g.scale(zoom, zoom); g.translate(-cx, -cy);
-    g.globalAlpha = sc.alpha;
+    mix = Math.min(1, mix + dt / MORPH);
+    const ease = mix * mix * (3 - 2 * mix), morphing = prevScene && mix < 1, swirl = morphing ? Math.sin(ease * Math.PI) : 0;
+    const blend = k => (morphing ? prevScene[k] + (sc[k] - prevScene[k]) * ease : sc[k]); // the trails' movement, old → new
+    const push = blend('drift') * S * (0.0045 + level * 0.006), zoom = blend('zoom') + bassS * 0.02 + pulse * 0.018 + swirl * 0.018;
+    g.save(); g.translate(cx + Math.cos(sc.dir) * push, cy + Math.sin(sc.dir) * push - blend('rise') * S * (0.004 + level * 0.004));
+    g.rotate(blend('rot') * (1 + level) + swirl * swirlDir * 0.03); g.scale(zoom, zoom); g.translate(-cx, -cy);
+    g.globalAlpha = blend('alpha') - swirl * 0.06; // trails fade a touch faster mid-morph, so two scenes at once don't pile up into white
     g.drawImage(buf, 0, 0, W, H);
     g.restore(); g.globalAlpha = 1;
     g.globalCompositeOperation = 'lighter';
@@ -160,7 +169,7 @@ export function openVisualizer(host, audio, info, { icon, haptic = () => {}, onC
     const sp = 1 + level * 2.5 + kick * 3;
     cam.ax += cam.vx * dt * sp; cam.ay += cam.vy * dt * sp; cam.az += cam.vz * dt * sp;
     if (pulse > 0.95 || kick > 0.95) { cam.vx += rnd(-0.25, 0.25); cam.vy += rnd(-0.25, 0.25); cam.vz += rnd(-0.1, 0.1); }
-    cam.vx *= 0.995; cam.vy *= 0.995;
+    if (cam.tx !== undefined) { const e = Math.min(1, dt * 0.8); cam.vx += (cam.tx - cam.vx) * e; cam.vy += (cam.ty - cam.vy) * e; cam.vz += (cam.tz - cam.vz) * e; }
     const [sx, cxr, sy, cyr, sz, czr] = [Math.sin(cam.ax), Math.cos(cam.ax), Math.sin(cam.ay), Math.cos(cam.ay), Math.sin(cam.az), Math.cos(cam.az)];
     const proj = (x, y, z) => {
       const y1 = y * cxr - z * sx, z1 = y * sx + z * cxr, x2 = x * cyr + z1 * sy, z2 = -x * sy + z1 * cyr;
@@ -169,6 +178,9 @@ export function openVisualizer(host, audio, info, { icon, haptic = () => {}, onC
     };
     const step = n => Math.floor(wave.length / n), w = k => (wave[k] - 128) / 128;
 
+    const drawScene = (sc, fade) => {
+    g.globalAlpha = fade;
+    const hue = sc.hue + t * 6 + bassS * 50; // which of the cover's colours, drifting slowly between them
     if (sc.kind === 'helix') {
       // two strands of square dots twisting round each other; the waveform ripples them, the spectrum swells them
       const N = 120, spec = bands(N, 40, 12000), st = step(N), tw = 3 + bassS * 2;
@@ -247,27 +259,16 @@ export function openVisualizer(host, audio, info, { icon, haptic = () => {}, onC
         k ? g.lineTo(px, py) : g.moveTo(px, py);
       }
       g.strokeStyle = hsl(hue + t * 20, 60, 0.6 + level * 0.35); g.stroke();
-    } else if (sc.kind === 'terrain') {
-      // the spectrum as a landscape rolling towards you (a new row every 50 ms), drawn as glowing lines
-      landT += dt;
-      if (landT > 0.05 || !land.length) { landT = 0; land.unshift(Array.from(bands(40))); if (land.length > 30) land.pop(); }
-      // a wireframe: each row of the spectrum as a ridge line, joined front to back, in perspective from just above it
-      const horizon = H * 0.36, pts = land.map((row, r) => {
-        const z = (r + landT / 0.05) / 30, f = 1 / (z * 2.4 + 0.3);
-        return row.length && Array.from({ length: 40 }, (_, c) => {
-          const v = row[c < 20 ? 19 - c : c - 20] * (0.8 + bassS * 0.9); // low notes in the middle, mirrored out
-          return [cx + (c / 39 - 0.5) * 3.4 * f * S * 0.5, horizon + (0.42 - v * 1.1) * f * S * 0.5, z];
-        });
-      });
-      for (let r = pts.length - 1; r >= 0; r--) {
-        const row = pts[r], near = 1 - row[0][2];
-        g.strokeStyle = hsl(hue + r * 7, 35 + near * 30, 0.1 + near * 0.8); g.lineWidth = 0.6 + near * 1.8;
-        g.beginPath(); row.forEach(([x, y], c) => (c ? g.lineTo(x, y) : g.moveTo(x, y))); g.stroke();
-        if (r > 0) { // the lines running towards you
-          const prev = pts[r - 1]; g.lineWidth = 0.5 + near; g.beginPath();
-          for (let c = 0; c < 40; c += 3) { g.moveTo(row[c][0], row[c][1]); g.lineTo(prev[c][0], prev[c][1]); }
-          g.stroke();
-        }
+    } else if (sc.kind === 'warp') {
+      // stars flying at you, streaking as they pass; louder = faster, each star brightened by its own band
+      const b = bands(24), speed = 0.25 + level * 1.6 + bassS * 0.8;
+      for (const q of flyers) {
+        const z0 = q.z; q.z -= dt * speed * 0.6;
+        if (q.z < 0.03) { q.x = rnd(-1, 1); q.y = rnd(-1, 1); q.z = 1; continue; }
+        const f0 = 0.35 / z0, f1 = 0.35 / q.z, x0 = cx + q.x * f0 * S, y0 = cy + q.y * f0 * S, x1 = cx + q.x * f1 * S, y1 = cy + q.y * f1 * S;
+        if (x1 < -50 || x1 > W + 50 || y1 < -50 || y1 > H + 50) { q.z = 0; continue; }
+        g.strokeStyle = hsl(hue + q.b * 15, 55 + b[q.b] * 30, Math.min(1, 0.25 + (1 - q.z) * 0.6 + b[q.b] * 0.4)); g.lineWidth = 0.6 + (1 - q.z) * 2.2;
+        g.beginPath(); g.moveTo(x0, y0); g.lineTo(x1, y1); g.stroke();
       }
     } else {
       // kaleidoscope: blobs and a strand of waveform in one slice, mirrored round; the inward spin turns it into a tunnel
@@ -284,6 +285,11 @@ export function openVisualizer(host, audio, info, { icon, haptic = () => {}, onC
         g.restore();
       }
     }
+
+    };
+    if (morphing) drawScene(prevScene, 1 - ease);
+    drawScene(sc, morphing ? ease : 1);
+    g.globalAlpha = 1;
 
     for (let n = sparks.length - 1; n >= 0; n--) { // sparks thrown off on kicks
       const q = sparks[n];
