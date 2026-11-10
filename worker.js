@@ -1266,7 +1266,9 @@ export default {
       if (path.startsWith('/blob/') && env.LOCAL) return await localBlob(req, env, path.slice(6));
       // The landing page is the front door (/), signing in is /login and the app itself is /library.
       // Signed-in people, and links into the app (like /?track=… from notifications), go straight to /library.
-      if (path === '/about' || path === '/about/') return Response.redirect(url.origin + '/', 301);
+      // /about always shows the landing page, signed in or not (/ takes signed-in people to their library)
+      if (path === '/about/') return Response.redirect(url.origin + '/about', 301);
+      if (path === '/about') return env.ASSETS.fetch(new Request(new URL('/about', url), req));
       if (path === '/' || path === '/login') {
         const signedIn = !!(await userFromCookie(req, env));
         if (signedIn || (path === '/' && url.search)) return Response.redirect(`${url.origin}/library${url.search}`, 302);
