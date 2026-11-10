@@ -5,7 +5,7 @@ import { decodeAudio, bpmKeyOf, parseName, trackInfo, readTags, cleanTitle, lead
 import { peaksOf, waveSvg } from './wave.js';
 import { makeZip, safeName } from './zip.js';
 
-const APP_VERSION = '[vault] v3.6.1'; // shown in Settings and sent with bug reports
+const APP_VERSION = '[vault] v3.6.2'; // shown in Settings and sent with bug reports
 // ---- helpers ------------------------------------------------------------------
 const $ = (s, el = document) => el.querySelector(s);
 function h(tag, attrs = {}, ...kids) {
@@ -2063,6 +2063,7 @@ let queue = [], qi = -1, cur = null, blobUrl = null, playToken = 0, audioUnlocke
 const SILENT = 'data:audio/wav;base64,UklGRrQBAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YZABAACAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICA';
 async function playList(list, i, { shuffle } = {}) {
   queue = list.slice(); P.history = [];
+  P.from = S.view.type === 'playlist' ? S.view.id : null; // played from a playlist (else: each track's own project)
   if (shuffle !== undefined) { P.shuffle = shuffle; store.set('shuffle', shuffle); }
   await playAt(i);
 }
@@ -2370,13 +2371,20 @@ function drawFullPlayer() {
         oninput(e) { syncRange(e.target); if (audio.duration) audio.currentTime = (e.target.value / 1000) * audio.duration; } });
   if (t.peaks) scrub.firstChild.innerHTML = waveSvg(t.peaks, 70);
   fp.scrub = scrub; fp.t1 = h('span', {}, '0:00'); fp.t2 = h('span', {}, '-0:00');
-  const title = h('div', { className: 'fp-t' }, t.name);
+  // The project or playlist it's playing from; tapping its name (top) or the song title opens it.
+  const pl = P.from && playlistOf(P.from)?.ids?.includes(t.id) ? playlistOf(P.from) : null;
+  const openFrom = () => { // a song saved from someone's link has no project of yours to open
+    if (!pl && !projectOf(t.project_id)) return;
+    fp.d.close(); setView(pl ? { type: 'playlist', id: pl.id } : { type: 'project', id: t.project_id });
+  };
+  const fromName = pl ? pl.name : projectOf(t.project_id)?.name;
+  const title = h('div', { className: 'fp-t fp-link', role: 'button', tabIndex: 0, title: `Open ${fromName || 'the project'}`, onclick: openFrom, onkeydown(e) { if (e.key === 'Enter') openFrom(); } }, t.name);
   fill(fp.d.firstChild,
     h('div', { className: 'fp-bg', style: art ? bg(art) : { backgroundImage: washFor(t) } }),
     h('span', { className: 'fp-grab', 'aria-hidden': 'true' }),
     h('div', { className: 'fp-top' },
       h('button', { className: 'icon-btn fp-close', 'aria-label': 'Close the player', onclick: () => fp.d.close() }, icon('chevron', 24)),
-      h('div', { className: 'fp-from' }, h('span', { className: 'mono' }, '[now playing]'), h('b', {}, projectOf(t.project_id)?.name || 'your library')),
+      h('button', { className: 'fp-from fp-link', title: `Open ${fromName || 'the project'}`, onclick: openFrom }, h('span', { className: 'mono' }, '[now playing]'), h('b', {}, fromName || 'your library')),
       h('button', { className: 'icon-btn', 'aria-label': 'Track options', onclick: () => trackMenu(t, queue) }, icon('more', 22))),
     h('div', { className: 'fp-art' + (art ? '' : ' disc') + (playing ? ' playing' : ''), style: bg(art) }),
     h('div', { className: 'fp-info' },
