@@ -274,7 +274,7 @@ function driveStep(box, d) {
   fill(box, h('div', { className: 'stack' }, h('div', { className: 'brandmark' }, '[connect drive]'),
     h('p', { className: 'muted', style: { margin: 0 } }, 'Your music is stored in your own Google Drive, in a folder called [vault]. The app can only see files it puts there, nothing else in your Drive.'),
     h('a', { className: 'btn primary', href: '/api/drive/connect', style: { width: '100%', height: '42px', display: 'grid', placeItems: 'center' } }, 'Connect Google Drive'),
-    h('small', { className: 'muted' }, 'Google may warn that the app isn\'t verified. Tap Advanced → Go to [vault] to continue. In the iPhone app this opens Safari: come back here once it says connected.'),
+    h('small', { className: 'muted' }, 'In the iPhone app this opens Safari: come back here once it says connected.'),
     h('button', { type: 'button', className: 'linkish', onclick: logout }, 'Log out')));
 }
 // Profile pictures: a 256px square JPEG made here, kept with the account.
@@ -2504,7 +2504,7 @@ async function settingsDialog(only) {
         h('button', { className: 'btn danger', onclick: () => { d.close(); deleteAccountDialog(); } }, 'Delete'))),
     !only && h('div', { className: 'set-sec' }, h('h3', {}, '[support]'),
       row('Support [vault]', 'Free, no ads. Tips help keep it that way.', h('a', { className: 'btn', href: 'https://ko-fi.com/choseroxy', target: '_blank', rel: 'noopener' }, 'Tip ☕'))),
-    h('div', { className: 'btns' }, h('span', { className: 'mono', style: { marginRight: 'auto', color: 'var(--fg-3)', alignSelf: 'center' } }, '[vault] v2.5.1'),
+    h('div', { className: 'btns' }, h('span', { className: 'mono', style: { marginRight: 'auto', color: 'var(--fg-3)', alignSelf: 'center' } }, '[vault] v2.5.2'),
       h('button', { className: 'btn primary', onclick: () => d.close() }, 'Done'))), { className: 'settings-dlg' });
   if (only) d.querySelectorAll('.set-sec').forEach(sec => sec.querySelector('h3').textContent !== `[${only}]` && sec.remove());
   api('/versions/old').then(({ count, size }) => {
