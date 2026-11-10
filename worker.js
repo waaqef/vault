@@ -947,7 +947,7 @@ async function driveCallback(req, env, url) {
     const google = await drive.whoIs(t.access_token);
     if (!google) return back("Google didn't say which account that was. Try again.");
     if (await env.DB.prepare('SELECT 1 FROM users WHERE drive_account = ? AND id != ?').bind(google, u.id).first())
-      return back(`${google} is already connected to a different [vault] account. Sign in with a different Google account.`);
+      return back(`taken:${google}`); // shown with links: sign in (to that account), or connect a different Google account
     const sealed = await drive.seal(env.APP_PASSWORD, t.refresh_token);
     await env.DB.prepare("UPDATE users SET drive_refresh = ?, drive_account = ?, storage = 'drive' WHERE id = ?").bind(sealed, google, u.id).run();
     drive.forget(u.id); // drop any access token from a previously connected Google account
@@ -960,7 +960,9 @@ async function driveCallback(req, env, url) {
 }
 const drivePage = msg => `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>[vault]</title>
 <body style="margin:0;min-height:100vh;display:grid;place-items:center;background:#191919;color:#fff;font:16px/1.5 system-ui,sans-serif;text-align:center;padding:24px">
-<div><div style="font-weight:600;font-size:22px;margin-bottom:10px">[vault]</div><p>${msg === 'connected' ? 'Google Drive is connected. Go back to the [vault] app.' : String(msg).replace(/[<>&"]/g, '')}</p></div>`;
+<div><div style="font-weight:600;font-size:22px;margin-bottom:10px">[vault]</div><p>${msg === 'connected' ? 'Google Drive is connected. Go back to the [vault] app.'
+  : msg.startsWith('taken:') ? `${msg.slice(6).replace(/[<>&"]/g, '')} is already connected to a different [vault] account.<br>Please <a href="/login" style="color:#fff">sign in</a> or <a href="/api/drive/connect" style="color:#fff">connect a different Google account</a>.`
+  : String(msg).replace(/[<>&"]/g, '')}</p></div>`;
 
 // ---- admin: people ----
 const adminOnly = u => (u.is_admin ? null : fail('Only the admin can do that', 403));

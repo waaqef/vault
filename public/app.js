@@ -5,7 +5,7 @@ import { decodeAudio, bpmKeyOf, parseName, trackInfo, readTags, cleanTitle, lead
 import { peaksOf, waveSvg } from './wave.js';
 import { makeZip, safeName } from './zip.js';
 
-const APP_VERSION = '[vault] v3.6.2'; // shown in Settings and sent with bug reports
+const APP_VERSION = '[vault] v3.6.3'; // shown in Settings and sent with bug reports
 // ---- helpers ------------------------------------------------------------------
 const $ = (s, el = document) => el.querySelector(s);
 function h(tag, attrs = {}, ...kids) {
@@ -274,7 +274,13 @@ async function load() {
 // Back from connecting Google Drive: ?drive=connected, or what went wrong.
 function driveBack() {
   const back = new URLSearchParams(location.search).get('drive');
-  if (back) { history.replaceState(null, '', '/library' + viewHash(S.view)); toast(back === 'connected' ? 'Google Drive connected' : back, { error: back !== 'connected', ms: 6000 }); }
+  if (!back) return;
+  history.replaceState(null, '', '/library' + viewHash(S.view));
+  // That Google account belongs to another [vault] account: sign in to that one, or pick another Google account.
+  if (back.startsWith('taken:')) return toast(h('span', {}, `${back.slice(6)} is already connected to a different [vault] account. Please `,
+    h('a', { href: '/login', className: 'toast-link', onclick(e) { e.preventDefault(); logout(); } }, 'sign in'), ' or ',
+    h('a', { href: '/api/drive/connect', className: 'toast-link' }, 'connect a different Google account'), '.'), { error: true, ms: 20000 });
+  toast(back === 'connected' ? 'Google Drive connected' : back, { error: back !== 'connected', ms: 6000 });
 }
 
 function showLogin() {

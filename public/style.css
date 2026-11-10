@@ -661,6 +661,7 @@ body.playing .uq { bottom: calc(92px + env(safe-area-inset-bottom)); }
 /* [disc N] above each disc of a multi-disc album */
 .disc-head { padding: 18px 12px 6px; font-size: 11px; color: var(--fg-3); letter-spacing: .04em; border-bottom: 1px solid var(--line, rgba(255,255,255,.08)); }
 .disc-l input { width: 70px; }
+.toast-link { color: inherit; text-decoration: underline; text-underline-offset: 2px; font-weight: 600; }
 /* now playing: the project / playlist name and the song title open where it's playing from */
 button.fp-from { background: none; border: 0; color: inherit; font: inherit; padding: 4px 10px; border-radius: 10px; cursor: pointer; }
 .fp-link { cursor: pointer; }
