@@ -210,5 +210,10 @@ console.log('zip ok');
   assert.deepEqual(album.map(n => cleanTitle(n, '', nums).title), ['Haha', 'Drone', 'Summrsita', 'KING OF ROCK', '2 Times', '223 (feat. SSGKobe)', '9 To 5', '0013 147 f major', 'Attached__']);
   assert.equal(cleanTitle('02 MERSELESS prod. envyother +').prod, 'envyother');
   assert.deepEqual([cleanTitle('2-03 ON FLEEK').disc, cleanTitle('2-03 ON FLEEK').track, cleanTitle('03 ON FLEEK').disc], [2, 3, null]);
+  { // the file's own title beats its name
+    const fr = Buffer.concat([frame('TIT2', 'Real Title'), frame('TPE1', 'Che')]), sz = fr.length;
+    const hd = Buffer.from([0x49, 0x44, 0x33, 3, 0, 0, (sz >> 21) & 127, (sz >> 14) & 127, (sz >> 7) & 127, sz & 127]);
+    assert.equal((await trackInfo(new File([hd, fr], '03 - export_v2_final.mp3'))).title, 'Real Title');
+  }
   console.log('import info ok');
 }

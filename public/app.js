@@ -1,11 +1,11 @@
 import { MAX, ACCEPT_AUDIO, ACCEPT_IMAGE, kindOf, extForType } from './types.js';
 import { icon } from './icons.js';
 import { settings, setSetting, ACCENTS } from './settings.js';
-import { decodeAudio, bpmKeyOf, parseName, trackInfo, readTags, cleanTitle, leadNumbers } from './detect.js';
+import { decodeAudio, bpmKeyOf, parseName, trackInfo, readTags, cleanTitle, leadNumbers, isGeneric } from './detect.js';
 import { peaksOf, waveSvg } from './wave.js';
 import { makeZip, safeName } from './zip.js';
 
-const APP_VERSION = '[vault] v3.12'; // shown in Settings and sent with bug reports
+const APP_VERSION = '[vault] v3.13'; // shown in Settings and sent with bug reports
 // ---- helpers ------------------------------------------------------------------
 const $ = (s, el = document) => el.querySelector(s);
 function h(tag, attrs = {}, ...kids) {
@@ -2750,6 +2750,7 @@ async function settingsDialog(only) {
       row('Downloads on this device', local, clearBtn),
       row('Back up everything', 'Copies every project, cover and note into a folder on this computer', h('button', { className: 'btn', onclick: () => { d.close(); backupAll(); } }, 'Back up')),
       S.me?.owner && row('Move to Google Drive', 'Copies your files from Backblaze into your Google Drive, one at a time. You can stop and carry on any time.', h('button', { className: 'btn', onclick: () => { d.close(); moveToDrive(); } }, 'Move')),
+      row('Read info from files', 'Saves the title, artist, producer and track number written inside each file, without changing anything. Picks up where it left off', h('button', { className: 'btn', onclick: () => { d.close(); readFileInfo(); } }, 'Read')),
       row('Tidy up track info', 'Takes track numbers off names (the order stays), moves “prod. X” into a tag, and fills in artists from the files', h('button', { className: 'btn', onclick: () => { d.close(); tidyTracks(); } }, 'Tidy up'))),
     // The share-sheet Shortcut is for the web app; hidden inside the sideloaded iPhone app.
     !nativeHaptics && h('div', { className: 'set-sec' }, h('h3', {}, '[iphone web app]'),
@@ -3415,6 +3416,35 @@ const remoteFile = t => ({
 });
 // Every track of yours: track numbers off the names (positions don't change, so the order stays), "prod. X" out of
 // the name into a tag, and the artist and producer from the file's own tags where it has them.
+// Reads each file's own tags (title, artist, producer, track, disc) and saves them with the track, changing nothing
+// else. Tracks already read are skipped, so after a stop (e.g. Backblaze's daily limit) it carries on from there.
+async function readFileInfo() {
+  const mine = new Set(S.projects.map(p => p.id));
+  const todo = S.tracks.filter(t => mine.has(t.project_id) && !t.meta && /\.(mp3|m4a|mp4|aac|flac)$/i.test(t.file_key || ''));
+  if (!todo.length) return toast('Every file has been read already.');
+  if (!(await confirm('Read info from files?', `Reads the title, artist, producer and track number written inside ${todo.length} files and saves them with each track. Nothing about your tracks changes. Keep this tab open; if it stops, press Read again and it carries on.`, 'Read'))) return;
+  const note = toast('', { ms: 0 });
+  let done = 0, failed = 0, inRow = 0, stop = '';
+  const one = async t => {
+    let bad = null;
+    const file = remoteFile(t), slice = file.slice;
+    file.slice = (a, b) => { const p = slice(a, b); return { arrayBuffer: () => p.arrayBuffer().catch(e => { bad = e; throw e; }) }; };
+    const tags = await readTags(file);
+    if (bad) throw bad; // couldn't reach the file: leave it for next time rather than saving "no info"
+    const meta = { title: tags.title && !isGeneric(tags.title) ? tags.title : '', artist: tags.artist || '', producer: tags.producer || '', track: tags.track || null, disc: tags.disc || null };
+    await api(`/tracks/${t.id}`, { method: 'PATCH', body: { meta } });
+    t.meta = JSON.stringify(meta);
+  };
+  const queue = [...todo];
+  await Promise.all(Array.from({ length: 3 }, async () => {
+    for (let t; !stop && (t = queue.shift());) {
+      try { await one(t); inRow = 0; } catch (e) { if (e.message === 'Not logged in') throw e; failed++; if (++inRow >= 6) stop = e.message; }
+      note.textContent = `Reading files: ${++done} of ${todo.length}…`;
+    }
+  })).catch(oops);
+  note.remove();
+  toast(stop ? `Stopped after ${done - failed} files: the storage isn't answering (${stop}). If Backblaze's daily limit is used up, press Read again after it resets.` : `Read ${done - failed} files${failed ? ` (${failed} couldn't be read; press Read again to retry)` : ''}.`, { ms: 8000, error: !!stop || failed > 0 });
+}
 async function tidyTracks() {
   const mine = new Set(S.projects.map(p => p.id)), tracks = S.tracks.filter(t => mine.has(t.project_id));
   if (!tracks.length) return toast('No tracks to tidy yet.');

@@ -429,6 +429,7 @@ function cleanTrack(b) {
   if ('position' in b) { b.position = numOrNull(b.position, -1e9, 1e9); if (b.position === null) delete b.position; }
   if ('peaks' in b) b.peaks = peaksOrNull(b.peaks);
   if ('mark' in b) b.mark = ['star', 'throw'].includes(b.mark) ? b.mark : null; // favourite / throwaway
+  if ('meta' in b) b.meta = b.meta == null ? null : String(typeof b.meta === 'string' ? b.meta : JSON.stringify(b.meta)).slice(0, 2000); // what the file's own tags say
   if ('disc' in b) { b.disc = numOrNull(b.disc, 1, 99); if (b.disc !== null) b.disc = Math.round(b.disc); } // disc of an album
   return b;
 }
@@ -452,7 +453,7 @@ on('POST', '/api/tracks', async (req, env, b, p, url, ctx, u) => {
   await logActivity(env, proj.id, u, `added “${cleanName(b.name, 120) || 'Untitled'}”`);
   return json({ id });
 });
-const TRACK_FIELDS = ['name', 'project_id', 'bpm', 'musical_key', 'tags', 'cover', 'position', 'notes', 'artist', 'duration', 'peaks', 'mark', 'disc'];
+const TRACK_FIELDS = ['name', 'project_id', 'bpm', 'musical_key', 'tags', 'cover', 'position', 'notes', 'artist', 'duration', 'peaks', 'mark', 'disc', 'meta'];
 on('PATCH', '/api/tracks/:id', async (req, env, b, { id }, url, ctx, u) => {
   const old = await editTrack(env, u, id);
   if (!old) return fail('Not found', 404);

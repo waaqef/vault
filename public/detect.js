@@ -273,13 +273,15 @@ export function cleanTitle(name, artist = '', numbered = null) {
   }
   return { title: s.trim() || String(name || ''), track, prod, disc };
 }
+// "Track 03", "Audio 1", "New Recording 5", a long hex id: names that say nothing about the song
+export const isGeneric = title => /^(?:track|audio|untitled|new recording|recording|voice memo|bounce|export|mixdown|master)?\s*\d*$/i.test(String(title || '').trim()) || /^[0-9a-f-]{16,}$/i.test(String(title || '').trim());
 export async function trackInfo(file, numbered = null) {
   const tags = await readTags(file);
   const byName = parseTitle(file.name, tags.artist, numbered);
   const fromTag = tags.title ? parseTitle(tags.title, tags.artist) : null;
-  const generic = /^(?:track|audio|untitled|new recording|recording|voice memo|bounce|export|mixdown|master)?\s*\d*$/i.test(byName.title) || /^[0-9a-f-]{16,}$/i.test(byName.title);
+  // The file's own title comes first (unless it's a placeholder like "Track 03"), then the file name.
   return {
-    title: generic && fromTag?.title ? fromTag.title : byName.title,
+    title: fromTag?.title && !isGeneric(fromTag.title) ? fromTag.title : byName.title,
     artist: tags.artist || '',
     prod: byName.prod || fromTag?.prod || tags.producer || '',
     track: byName.track ?? tags.track ?? fromTag?.track ?? null,
