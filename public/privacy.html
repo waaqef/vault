@@ -10,17 +10,19 @@
 <main><article class="glass">
 <span class="label">[privacy]</span>
 <h1>Privacy Policy</h1>
-<p class="updated">Last updated: 9 November 2026 (sign-up is open to everyone; invite codes and invite requests removed)</p>
+<p class="updated">Last updated: 10 November 2026 (open sign-up, display names, notifications, sign-in limits and what's kept on your device)</p>
 <p>[vault] is a small, free app for storing and working on music projects. It has no ads and does not sell, rent or share your information with anyone.</p>
 
 <p>[vault] is open source. Anyone can read exactly what it does with your data: <a href="https://github.com/waaqef/vault">github.com/waaqef/vault</a>.</p>
 
 <h2>What [vault] stores</h2>
 <ul>
-<li><b>Your account:</b> your username, a one-way hash of your password (never the password itself) and your profile picture, if you add one.</li>
-<li><b>Your library:</b> the names, notes, tags, BPM, key and folder structure of your projects and tracks.</li>
-<li><b>Share links you make:</b> the names listeners type in, what they played and for how long, and any comments they leave. If a listener is signed in to [vault], their username is used instead of a typed name.</li>
-<li><b>Comments:</b> comments you write on a track, with your username and the moment in the track they're pinned to.</li>
+<li><b>Your account:</b> your username, your display name if you set one, a one-way hash of your password (never the password itself) and your profile picture, if you add one.</li>
+<li><b>Your library:</b> the names, notes, tags, BPM, key, stars and throwaway marks, covers and folder structure of your projects and tracks, plus your editor presets and Home layout.</li>
+<li><b>Share links you make:</b> the names listeners type in, what they played and for how long, and any comments they leave. If a listener is signed in to [vault], their display name (or username) is used instead of a typed name.</li>
+<li><b>Comments:</b> comments you write on a track, with your name and the moment in the track they're pinned to.</li>
+<li><b>Notifications:</b> your inbox (who listened, commented or shared a project with you), kept for 60 days. If you turn on notifications in a browser, that browser's push address, so they can be delivered; it's removed when you turn them off. The [vault] iPhone app checks your inbox itself and doesn't send anything extra.</li>
+<li><b>Sign-in protection:</b> to slow down password guessing and automated sign-ups, the internet (IP) address of failed sign-ins and new accounts is counted for 15 minutes. It isn't linked to your account or kept longer.</li>
 <li><b>Shared projects:</b> who you added to a project and whether they can listen or edit, projects you saved to your library from a link, and a log of changes made in shared projects (for example "maya added a track"). The log is kept for 90 days.</li>
 </ul>
 
@@ -34,21 +36,21 @@
 <ul>
 <li><b>People you add to a project</b> can see and play it. If you let them edit, they can also add, remove, rename and edit its tracks. Files they add are stored in your storage, because the project is yours. They can see the project's comments and its change log.</li>
 <li><b>Share links:</b> people signed in to [vault] can play everything the link shares and save it to their library. Everyone else hears 5-second previews, unless you make the link public, in which case anyone with it can play it in full. You can turn a link off or delete it at any time.</li>
-<li><b>The person who runs [vault]</b> can see each account's username, picture, track count and storage used, but not your files.</li>
+<li><b>The person who runs [vault]</b> can see each account's username, display name, picture, track count and storage used, and can turn off, reset the password of or delete an account. They can't see your files.</li>
 </ul>
 <p>Other [vault] users can't see anything of yours that you haven't shared with them.</p>
 
 <h2>Where it's kept</h2>
-<p>Account and library information is stored on Cloudflare. Files belonging to the admin account are stored on Backblaze B2, and every other account's files are stored in that person's own Google Drive. Songs you play may also be saved in your browser so they don't have to download again. These are removed when you log out.</p>
+<p>Account and library information is stored on Cloudflare. Files belonging to the admin account are stored on Backblaze B2, and every other account's files are stored in that person's own Google Drive. Your device also keeps a copy of your library (so the app opens quickly and works offline), songs you've played or saved offline, and your settings. All of it except your settings is removed when you log out.</p>
 
 <h2>Deleting your data</h2>
-<p>You can delete any track or project at any time; it goes to Recently deleted and is removed for good after 30 days, or straight away if you empty it. To delete your whole account, go to Account → Delete account (or ask the person who invited you). This removes your account, your library and the files [vault] created in your Drive. You can also remove [vault]'s access to your Drive at any time from <a href="https://myaccount.google.com/permissions">your Google Account permissions</a>.</p>
+<p>You can delete any track or project at any time; it goes to Recently deleted and is removed for good after 30 days, or straight away if you empty it. To delete your whole account, go to Settings → Account → Delete account. This removes your account, your library and the files [vault] created in your Drive. You can also remove [vault]'s access to your Drive at any time from <a href="https://myaccount.google.com/permissions">your Google Account permissions</a>.</p>
 
 <h2>Changes</h2>
 <p>If this policy changes, the date at the top will change too.</p>
 
 <h2>Contact</h2>
-<p>For questions or to delete your data, open an issue at <a href="https://github.com/waaqef/vault/issues">github.com/waaqef/vault</a>, or delete your account yourself under Account → Delete account.</p>
+<p>For questions or to delete your data, open an issue at <a href="https://github.com/waaqef/vault/issues">github.com/waaqef/vault</a>, or delete your account yourself under Settings → Account → Delete account.</p>
 </article></main>
 <footer><a href="/">About</a><a href="/privacy">Privacy Policy</a><a href="/terms">Terms of Service</a><a href="https://github.com/waaqef/vault">Source code</a></footer>
 </body></html>
