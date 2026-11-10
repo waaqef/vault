@@ -203,6 +203,8 @@ body.paused .bars i { animation-play-state: paused; }
 .crop { justify-items: center; }
 .crop-frame { position: relative; overflow: hidden; border-radius: 16px; background: #000; touch-action: none; cursor: grab; box-shadow: inset 0 0 0 1px var(--line), 0 14px 40px rgba(0,0,0,.45); }
 .crop-frame:active { cursor: grabbing; }
+.crop-frame.round { border-radius: 50%; }
+.crop-frame.round .crop-grid { display: none; }
 .crop-img { position: absolute; left: 0; top: 0; transform-origin: 0 0; user-select: none; pointer-events: none; }
 .crop-grid { position: absolute; inset: 0; pointer-events: none; border-radius: inherit;
   background: linear-gradient(90deg, transparent calc(33.33% - .5px), rgba(255,255,255,.22) 0 calc(33.33% + .5px), transparent 0 calc(66.66% - .5px), rgba(255,255,255,.22) 0 calc(66.66% + .5px), transparent 0),

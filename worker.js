@@ -1099,8 +1099,8 @@ async function openShare(env, token) {
 }
 async function shareTracks(env, s) {
   const q = s.kind === 'project'
-    ? env.DB.prepare('SELECT id, name, duration, cover, artist, peaks, size, file_key FROM tracks WHERE project_id = ? AND deleted_at IS NULL ORDER BY position, created_at').bind(s.target_id)
-    : env.DB.prepare('SELECT id, name, duration, cover, artist, peaks, size, file_key FROM tracks WHERE id = ? AND deleted_at IS NULL').bind(s.target_id);
+    ? env.DB.prepare('SELECT id, name, duration, cover, artist, peaks, size, file_key, mark FROM tracks WHERE project_id = ? AND deleted_at IS NULL ORDER BY position, created_at').bind(s.target_id)
+    : env.DB.prepare('SELECT id, name, duration, cover, artist, peaks, size, file_key, mark FROM tracks WHERE id = ? AND deleted_at IS NULL').bind(s.target_id);
   return (await q.all()).results;
 }
 const shareCookie = (env, token) => hmac(env.APP_PASSWORD, 'share:' + token);

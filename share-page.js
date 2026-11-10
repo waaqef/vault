@@ -21,6 +21,11 @@ h1{font-size:36px;font-weight:500;letter-spacing:-.045em;margin:6px 0;line-heigh
 .row{display:grid;grid-template-columns:28px 1fr 84px auto;align-items:center;gap:12px;padding:12px;border-radius:12px;cursor:pointer;transition:background .15s;animation:rise .4s var(--ease) both}
 .row.has-dl{grid-template-columns:28px 1fr 84px auto 34px}.row .t{display:flex;flex-direction:column;min-width:0}.row .tn{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}.row .ta{font-size:12px;color:var(--fg3)}.dl{width:34px;height:34px;padding:0;border-radius:50%;background:none;color:var(--fg2);display:grid;place-items:center}.dl:hover{background:var(--f2);color:var(--fg)}.dl:disabled{opacity:.4}.row:hover{background:var(--f1)}.row.on{background:var(--f2)}
 .row .t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
+.star{color:#ffcf45}.throw{display:inline-block;margin-right:6px;padding:0 6px;border-radius:5px;background:rgba(255,92,92,.16);color:#ff8a80;font:10px "Plex Mono",ui-monospace,monospace;line-height:16px;vertical-align:1px}
+.row.is-throw .tn{color:var(--fg2)}
+.top{display:flex;align-items:center;gap:10px;margin-bottom:44px}.top .brand{margin:0 auto 0 0}
+.top a.pill{display:inline-flex;align-items:center;height:34px;padding:0 14px;border-radius:999px;font-size:13px;font-weight:500;text-decoration:none;background:rgba(255,255,255,.08);color:var(--fg)}
+.top a.pill.main{background:#fff;color:var(--bg)}
 .bars{display:none;gap:2px;height:14px;align-items:flex-end}.row.on .bars{display:flex}.row.on .n{display:none}
 .bars i{width:3px;height:14px;background:#fff;border-radius:2px;transform-origin:bottom;animation:eq .9s ease-in-out infinite}
 .bars i:nth-child(2){animation-duration:.7s;animation-delay:-.3s}.bars i:nth-child(3){animation-duration:1.1s;animation-delay:-.55s}
@@ -56,14 +61,17 @@ const token = location.pathname.split('/')[2], base = '/s/' + token, m = documen
 const el = (t, p = {}, ...k) => { const e = document.createElement(t); Object.assign(e, p); e.append(...k); return e; };
 const fmt = s => s ? Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0') : '';
 const say = msg => { const t = el('div', { className: 'toast', textContent: msg }); t.setAttribute('role', 'alert'); document.body.append(t); setTimeout(() => t.remove(), 5000); };
-const brand = () => el('a', { className: 'brand', href: '/', textContent: '[vault]' });
+let me = null; // who's looking (once the link has opened)
+const brand = () => el('div', { className: 'top' }, el('a', { className: 'brand', href: '/', textContent: '[vault]' }),
+  ...(me ? [el('a', { className: 'pill main', href: '/library', textContent: 'Your library \u2192' })]
+    : [el('a', { className: 'pill', href: '/', textContent: 'About' }), el('a', { className: 'pill main', href: '/login?next=' + encodeURIComponent(location.pathname), textContent: 'Sign in' })]));
 let name = ''; try { name = localStorage.getItem('listener') || ''; } catch {}
 async function open(password) {
   const r = await fetch(base + '/open', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password }) });
   const d = await r.json();
   if (r.status === 401) return ask(password ? d.error : '');
   if (!r.ok) { m.replaceChildren(brand(), el('h1', { textContent: 'Link not available' })); return; }
-  if (d.viewer) name = d.viewer.name || d.viewer.username;
+  if (d.viewer) { name = d.viewer.name || d.viewer.username; me = d.viewer; }
   show(d);
 }
 function ask(err) {
@@ -112,7 +120,8 @@ function show(d) {
   const rows = d.tracks.map((t, i) => {
     const kids = [
       el('span', { className: 'mono' }, el('span', { className: 'n', textContent: String(i + 1).padStart(2, '0') }), el('span', { className: 'bars' }, el('i'), el('i'), el('i'))),
-      el('span', { className: 't' }, el('span', { className: 'tn', textContent: t.name }), t.artist ? el('span', { className: 'ta', textContent: t.artist }) : ''),
+      el('span', { className: 't' }, el('span', { className: 'tn' }, t.mark === 'star' ? el('span', { className: 'star', title: 'Starred', textContent: '\u2605 ' }) : '', t.name),
+        el('span', { className: 'ta' }, t.mark === 'throw' ? el('span', { className: 'throw', textContent: 'throwaway' }) : '', t.artist || '')),
       el('span', { className: 'mwrap' }, miniWave(peaksOf(t.peaks))),
       el('span', { className: 'mono', textContent: fmt(t.duration) }),
     ];
@@ -122,7 +131,7 @@ function show(d) {
       btn.onclick = e => { e.stopPropagation(); download(t, btn); };
       kids.push(btn);
     }
-    const r = el('div', { className: 'row' + (d.allow_download ? ' has-dl' : '') }, ...kids);
+    const r = el('div', { className: 'row' + (d.allow_download ? ' has-dl' : '') + (t.mark === 'throw' ? ' is-throw' : '') }, ...kids);
     r.style.animationDelay = (0.1 + Math.min(i, 16) * 0.025) + 's';
     r.onclick = () => (cur === i ? (a.paused ? a.play() : a.pause()) : play(i)); // tapping the playing song pauses it (previews have no player bar)
     return r;

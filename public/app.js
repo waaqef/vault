@@ -255,7 +255,7 @@ function showLogin() {
     const pic = h('button', { type: 'button', className: 'avatar xl pick', 'aria-label': 'Choose a profile picture', async onclick() {
       const [file] = await pickFiles('image/*,.heic,.heif', false);
       if (!file) return;
-      try { avatar = await avatarData(file); paintAvatar(pic, avatar); } catch (e) { oops(e); }
+      try { const a = await avatarData(file); if (a) { avatar = a; paintAvatar(pic, avatar); } } catch (e) { oops(e); }
     } }, icon('plus', 20));
     const shown = field('text', 'name', { maxLength: 40, placeholder: 'e.g. Maya Lee', autocapitalize: 'words' });
     const user = field('text', 'username', { required: true, minLength: 3, maxLength: 24, pattern: '[A-Za-z0-9._\\-]+', placeholder: 'letters, numbers, . _ -' });
@@ -282,12 +282,10 @@ function driveStep(box, d) {
     h('small', { className: 'muted' }, 'In the iPhone app this opens Safari: come back here once it says connected.'),
     h('button', { type: 'button', className: 'linkish', onclick: logout }, 'Log out')));
 }
-// Profile pictures: a 256px square JPEG made here, kept with the account.
+// Profile pictures: cropped here (round preview), a 256px JPEG kept with the account. Null if cancelled.
 async function avatarData(file) {
-  const img = await loadImg(await toJpeg(file));
-  const n = Math.min(img.naturalWidth, img.naturalHeight), c = h('canvas', { width: 256, height: 256 });
-  c.getContext('2d').drawImage(img, (img.naturalWidth - n) / 2, (img.naturalHeight - n) / 2, n, n, 0, 0, 256, 256);
-  return c.toDataURL('image/jpeg', 0.85);
+  const out = await cropCover(file, { size: 256, round: true, title: 'Crop picture', ok: 'Use picture' });
+  return out && new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(out); });
 }
 function paintAvatar(el, src, name = '') {
   el.classList.toggle('has', !!src);
@@ -1376,15 +1374,14 @@ async function toJpeg(file) {
   const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.88));
   return new File([blob], 'cover.jpg', { type: 'image/jpeg' });
 }
-// auto: no cropping step (a folder dropped with its artwork inside)
-async function setCover(table, item, file, { auto = false } = {}) {
+async function setCover(table, item, file) {
   if (!file) {
     const files = splitAccepted(await pickFiles(ACCEPT_IMAGE, false), 'cover');
     if (!files.length) return;
     file = files[0];
   }
   let jpeg;
-  try { jpeg = auto ? await toJpeg(file) : await cropCover(file); } catch (e) { return oops(e); }
+  try { jpeg = await cropCover(file); } catch (e) { return oops(e); }
   if (!jpeg) return; // cancelled
   const t = toast('Uploading cover…', { ms: 0 });
   try {
@@ -1397,12 +1394,12 @@ async function setCover(table, item, file, { auto = false } = {}) {
 
 // Crop & adjust a cover before it's uploaded: drag to move, pinch / scroll / slider to zoom, rotate, and a brightness
 // and contrast touch-up. Reset puts it all back. Resolves with a square 1000px JPEG, or null if cancelled.
-async function cropCover(file) {
+async function cropCover(file, { size: OUT = 1000, round = false, title = 'Crop cover', ok = 'Use cover' } = {}) {
   let img = await decodeImage(file);
-  const OUT = 1000, V = Math.min(320, innerWidth - 80); // the square you see, in CSS px
+  const V = Math.min(320, innerWidth - 80); // the square you see, in CSS px
   const st = { z: 1, x: 0, y: 0, light: 0, contrast: 0 };
   let base = 1;
-  const frame = h('div', { className: 'crop-frame', style: { width: V + 'px', height: V + 'px' } });
+  const frame = h('div', { className: 'crop-frame' + (round ? ' round' : ''), style: { width: V + 'px', height: V + 'px' } });
   const pic = h('canvas', { className: 'crop-img' });
   frame.append(pic, h('div', { className: 'crop-grid', 'aria-hidden': 'true' }));
   const zoom = h('input', { type: 'range', min: 1, max: 4, step: 0.01, value: 1, 'aria-label': 'Zoom', oninput() { zoomTo(+this.value); } });
@@ -1465,7 +1462,7 @@ async function cropCover(file) {
   return new Promise(res => {
     let done = false;
     const d = dialog(h('div', { className: 'stack crop' },
-      h('h2', {}, 'Crop cover'),
+      h('h2', {}, title),
       frame,
       h('small', { className: 'muted', style: { textAlign: 'center' } }, matchMedia('(pointer: coarse)').matches ? 'Drag to move · pinch to zoom' : 'Drag to move · scroll to zoom'),
       slider('[zoom]', zoom), slider('[brightness]', light), slider('[contrast]', contrast),
@@ -1481,7 +1478,7 @@ async function cropCover(file) {
           g.drawImage(img, -st.x / k, -st.y / k, V / k, V / k, 0, 0, OUT, OUT);
           const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.9));
           done = true; res(new File([blob], 'cover.jpg', { type: 'image/jpeg' })); d.close();
-        } }, 'Use cover'))), { className: 'settings-dlg crop-dlg' });
+        } }, ok))), { className: 'settings-dlg crop-dlg' });
     d.addEventListener('close', () => { if (!done) res(null); });
     useImage(img);
   });
@@ -1556,7 +1553,7 @@ async function handleDrop(dt, projectId, at) {
       const { id } = await api('/projects', { method: 'POST', body: { name: f.name, folder_id: folderId } });
       const art = f.files.find(x => kindOf(x.name) === 'cover');
       // Everything else (including other images, docs, etc.) goes in the queue; non-audio shows up as "skipped".
-      waits.push(uploadTracks(f.files.filter(x => x !== art), id, f.name).then(() => art && setCover('projects', { id }, art, { auto: true })));
+      waits.push(uploadTracks(f.files.filter(x => x !== art), id, f.name).then(() => art && setCover('projects', { id }, art)));
     }
   } catch (e) { oops(e); }
   await Promise.all(waits);
@@ -2591,7 +2588,7 @@ async function settingsDialog(only) {
         h('button', { className: 'btn', async onclick() {
           const [file] = await pickFiles('image/*,.heic,.heif', false);
           if (!file) return;
-          try { const avatar = await avatarData(file); await api('/me', { method: 'PATCH', body: { avatar } }); S.me.avatar = avatar; paintAvatar(meAvatar, avatar, nameOf(S.me)); renderSide(); } catch (e) { oops(e); }
+          try { const avatar = await avatarData(file); if (!avatar) return; await api('/me', { method: 'PATCH', body: { avatar } }); S.me.avatar = avatar; paintAvatar(meAvatar, avatar, nameOf(S.me)); renderSide(); } catch (e) { oops(e); }
         } }, 'Picture')),
       S.me && row('Display name', 'What people see on comments, activity and things you share',
         h('button', { className: 'btn', async onclick() {
@@ -2614,7 +2611,7 @@ async function settingsDialog(only) {
         h('button', { className: 'btn danger', onclick: () => { d.close(); deleteAccountDialog(); } }, 'Delete'))),
     !only && h('div', { className: 'set-sec' }, h('h3', {}, '[support]'),
       row('Support [vault]', 'Free, no ads. Tips help keep it that way.', h('a', { className: 'btn', href: 'https://ko-fi.com/choseroxy', target: '_blank', rel: 'noopener' }, 'Tip ☕'))),
-    h('div', { className: 'btns' }, h('span', { className: 'mono', style: { marginRight: 'auto', color: 'var(--fg-3)', alignSelf: 'center' } }, '[vault] v2.6'),
+    h('div', { className: 'btns' }, h('span', { className: 'mono', style: { marginRight: 'auto', color: 'var(--fg-3)', alignSelf: 'center' } }, '[vault] v2.6.1'),
       h('button', { className: 'btn primary', onclick: () => d.close() }, 'Done'))), { className: 'settings-dlg' });
   if (only) d.querySelectorAll('.set-sec').forEach(sec => sec.querySelector('h3').textContent !== `[${only}]` && sec.remove());
   api('/versions/old').then(({ count, size }) => {
