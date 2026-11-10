@@ -1118,6 +1118,7 @@ async function signup(req, env) {
   const lockKey = 'signup:' + clientIp(req), wait = await lockedFor(env, lockKey);
   if (wait) return fail(`Too many new accounts from here. Try again in ${Math.ceil(wait / 60)} min.`, 429);
   const b = await req.json().catch(() => ({}));
+  if (b.agree !== true) return fail("Please confirm you're 13 or older and agree to the Terms and Privacy Policy.");
   // Cloudflare Turnstile: on once TURNSTILE_SECRET (a secret) and TURNSTILE_SITE_KEY (in wrangler.toml) are set
   if (env.TURNSTILE_SECRET) {
     const r = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', { method: 'POST',

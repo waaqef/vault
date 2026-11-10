@@ -5,7 +5,7 @@ import { decodeAudio, bpmKeyOf, parseName } from './detect.js';
 import { peaksOf, waveSvg } from './wave.js';
 import { makeZip, safeName } from './zip.js';
 
-const APP_VERSION = '[vault] v2.8'; // shown in Settings and sent with bug reports
+const APP_VERSION = '[vault] v2.8.1'; // shown in Settings and sent with bug reports
 // ---- helpers ------------------------------------------------------------------
 const $ = (s, el = document) => el.querySelector(s);
 function h(tag, attrs = {}, ...kids) {
@@ -276,6 +276,9 @@ function showLogin() {
     // Cloudflare Turnstile: usually invisible; sometimes a tick box
     let human = '';
     const check = h('div', { className: 'ts-box' });
+    const agree = h('input', { type: 'checkbox', required: true });
+    const terms = h('label', { className: 'agree' }, agree, h('span', {}, "I'm 13 or older and agree to the ",
+      h('a', { href: '/terms', target: '_blank', rel: 'noopener' }, 'Terms'), ' and ', h('a', { href: '/privacy', target: '_blank', rel: 'noopener' }, 'Privacy Policy'), '.'));
     api('/signup-config').then(async c => {
       if (!c.turnstile) return;
       if (!window.turnstile) await loadScript('https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit');
@@ -283,12 +286,12 @@ function showLogin() {
     }).catch(() => {});
     fill(box, h('div', { className: 'brandmark' }, '[make an account]'), form(async () => {
       if (pw.value !== again.value) throw new Error("The passwords don't match.");
-      try { await api('/signup', { method: 'POST', body: { username: user.value.trim(), display_name: shown.value.trim(), password: pw.value, avatar, turnstile: human } }); }
+      try { await api('/signup', { method: 'POST', body: { username: user.value.trim(), display_name: shown.value.trim(), password: pw.value, avatar, turnstile: human, agree: agree.checked } }); }
       catch (x) { if (window.turnstile && check.firstChild) { window.turnstile.reset(check); human = ''; } throw x; }
       history.replaceState(null, '', '/library' + location.search.replace(/[?&]signup=1/, '').replace(/^&/, '?'));
       driveStep(box, d);
     }, pic, h('small', { className: 'muted' }, 'Profile picture (optional)'),
-    h('label', {}, '[name] what people see (optional)', shown), h('label', {}, '[username] unique, for signing in', user), h('label', {}, '[password] 8+ characters', pw), h('label', {}, '[password again]', again), check, err(),
+    h('label', {}, '[name] what people see (optional)', shown), h('label', {}, '[username] unique, for signing in', user), h('label', {}, '[password] 8+ characters', pw), h('label', {}, '[password again]', again), terms, check, err(),
     h('button', { className: 'btn primary', style: big }, 'Create account')),
     link('Already have an account? Sign in', signIn),
     h('small', { className: 'login-links' }, h('a', { href: '/privacy' }, 'Privacy'), h('a', { href: '/terms' }, 'Terms')));

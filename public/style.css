@@ -228,6 +228,9 @@ body.paused .bars i { animation-play-state: paused; }
 .trow .hit b { color: var(--fg); font-weight: 600; }
 /* sign-up check */
 .ts-box:empty { display: none; }
+.login .agree { display: flex; align-items: flex-start; gap: 10px; font-size: 13px; color: var(--fg-2); line-height: 1.45; text-align: left; cursor: pointer; }
+.login .agree input { flex: none; width: 18px; height: 18px; margin: 1px 0 0; accent-color: var(--user-accent); }
+.login .agree a { color: var(--fg); }
 .ts-box { display: grid; justify-items: center; min-height: 0; }
 /* analytics */
 .an-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
