@@ -285,6 +285,7 @@ async function purgeOldTrash(env) {
   await env.DB.batch([
     env.DB.prepare('DELETE FROM activity WHERE created_at < ?').bind(now() - 90 * DAY),
     env.DB.prepare('DELETE FROM inbox WHERE created_at < ?').bind(now() - 60 * DAY),
+    env.DB.prepare('DELETE FROM plays WHERE at < ?').bind(now() - 365 * DAY),
   ]);
 }
 
@@ -712,8 +713,9 @@ on('GET', '/api/storage-check', async (req, env, b, p, url, ctx, u) => {
 });
 
 // Shares (only of your own projects / tracks)
-const ownsTarget = (env, u, kind, id) => (kind === 'project' ? ownProject(env, u, id) : ownTrack(env, u, id));
-const ownShare = (env, u, token) => env.DB.prepare(`SELECT * FROM shares WHERE token = ? AND ((kind = 'project' AND target_id IN ${MY_PROJECTS}) OR (kind = 'track' AND target_id IN (SELECT id FROM tracks WHERE project_id IN ${MY_PROJECTS})))`).bind(token, u.id, u.id).first();
+const ownsTarget = (env, u, kind, id) => (kind === 'project' ? ownProject(env, u, id) : kind === 'playlist' ? ownPlaylist(env, u, id) : ownTrack(env, u, id));
+const ownShare = (env, u, token) => env.DB.prepare(`SELECT * FROM shares WHERE token = ? AND ((kind = 'project' AND target_id IN ${MY_PROJECTS}) OR (kind = 'track' AND target_id IN (SELECT id FROM tracks WHERE project_id IN ${MY_PROJECTS}))
+  OR (kind = 'playlist' AND target_id IN (SELECT id FROM playlists WHERE owner_id = ?)))`).bind(token, u.id, u.id, u.id).first();
 on('GET', '/api/shares', async (req, env, b, p, url, ctx, u) => {
   const kind = url.searchParams.get('kind'), target = url.searchParams.get('target_id');
   if (!(await ownsTarget(env, u, kind, target))) return json([]);
@@ -723,7 +725,7 @@ on('GET', '/api/shares', async (req, env, b, p, url, ctx, u) => {
   return json(results);
 });
 on('POST', '/api/shares', async (req, env, b, p, url, ctx, u) => {
-  if (!['project', 'track'].includes(b.kind)) return fail('Bad share');
+  if (!['project', 'track', 'playlist'].includes(b.kind)) return fail('Bad share');
   if (!(await ownsTarget(env, u, b.kind, b.target_id))) return fail('Not found', 404);
   const token = uid().replace(/-/g, '');
   await env.DB.prepare('INSERT INTO shares (token, kind, target_id, password_hash, expires_at, allow_download, public, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
@@ -935,7 +937,8 @@ on('PATCH', '/api/playlists/:id', async (req, env, b, { id }, url, ctx, u) => {
 });
 on('DELETE', '/api/playlists/:id', async (req, env, b, { id }, url, ctx, u) => {
   if (!(await ownPlaylist(env, u, id))) return json({ ok: true });
-  await env.DB.batch([env.DB.prepare('DELETE FROM playlist_tracks WHERE playlist_id = ?').bind(id), env.DB.prepare('DELETE FROM playlists WHERE id = ?').bind(id)]);
+  await env.DB.batch([env.DB.prepare('DELETE FROM playlist_tracks WHERE playlist_id = ?').bind(id), env.DB.prepare("DELETE FROM shares WHERE kind = 'playlist' AND target_id = ?").bind(id),
+    env.DB.prepare('DELETE FROM playlists WHERE id = ?').bind(id)]);
   return json({ ok: true }); // the songs themselves stay where they are
 });
 on('POST', '/api/playlists/:id/tracks', async (req, env, b, { id }, url, ctx, u) => {
@@ -969,11 +972,42 @@ on('GET', '/api/search', async (req, env, b, p, url, ctx, u) => {
   return json({ comments: results });
 });
 
+// ---- admin: reports of share links ----
+on('GET', '/api/admin/reports', async (req, env, b, p, url, ctx, u) => {
+  if (adminOnly(u)) return adminOnly(u);
+  const { results } = await env.DB.prepare(`SELECT r.*, s.kind, s.target_id, s.revoked, x.id AS owner_id, x.username AS owner_username, x.display_name AS owner_name, x.disabled AS owner_disabled, x.is_admin AS owner_admin,
+      COALESCE((SELECT name FROM projects WHERE id = s.target_id), (SELECT name FROM tracks WHERE id = s.target_id), (SELECT name FROM playlists WHERE id = s.target_id)) AS target_name
+    FROM reports r LEFT JOIN shares s ON s.token = r.share_token
+    LEFT JOIN users x ON x.id = COALESCE((SELECT owner_id FROM projects WHERE id = s.target_id), (SELECT p.owner_id FROM tracks t JOIN projects p ON p.id = t.project_id WHERE t.id = s.target_id), (SELECT owner_id FROM playlists WHERE id = s.target_id))
+    ORDER BY r.status = 'open' DESC, r.created_at DESC LIMIT 200`).all();
+  return json(results);
+});
+on('PATCH', '/api/admin/reports/:id', async (req, env, b, { id }, url, ctx, u) => {
+  if (adminOnly(u)) return adminOnly(u);
+  const r = await env.DB.prepare('SELECT share_token FROM reports WHERE id = ?').bind(Number(id) || 0).first();
+  if (!r) return fail('Not found', 404);
+  if (b.revoke) await env.DB.prepare('UPDATE shares SET revoked = 1 WHERE token = ?').bind(r.share_token).run(); // turn the link off
+  if ('status' in b) await env.DB.prepare('UPDATE reports SET status = ? WHERE id = ?').bind(b.status === 'done' ? 'done' : 'open', Number(id) || 0).run();
+  return json({ ok: true });
+});
+on('DELETE', '/api/admin/reports/:id', async (req, env, b, { id }, url, ctx, u) => {
+  if (adminOnly(u)) return adminOnly(u);
+  await env.DB.prepare('DELETE FROM reports WHERE id = ?').bind(Number(id) || 0).run();
+  return json({ ok: true });
+});
+
+// ---- plays inside the app (for analytics): one per song started and listened to for a bit ----
+on('POST', '/api/plays', async (req, env, b, p, url, ctx, u) => {
+  if (!(await readTrack(env, u, String(b.track_id || '')))) return json({ ok: true });
+  await env.DB.prepare('INSERT INTO plays (user_id, track_id, at) VALUES (?, ?, ?)').bind(u.id, b.track_id, now()).run();
+  return json({ ok: true });
+});
+
 // ---- admin: analytics ----
 on('GET', '/api/admin/analytics', async (req, env, b, p, url, ctx, u) => {
   if (adminOnly(u)) return adminOnly(u);
   const day = 864e5, since = now() - 30 * day;
-  const [tot, signups, plays, top] = await env.DB.batch([
+  const [tot, signups, plays, appPlays, top] = await env.DB.batch([
     env.DB.prepare(`SELECT
       (SELECT COUNT(*) FROM users) AS users,
       (SELECT COUNT(*) FROM users WHERE last_seen > ?) AS active7,
@@ -986,9 +1020,12 @@ on('GET', '/api/admin/analytics', async (req, env, b, p, url, ctx, u) => {
       (SELECT COUNT(*) FROM listens) AS listens,
       (SELECT COUNT(*) FROM comments) AS comments,
       (SELECT COUNT(*) FROM playlists) AS playlists,
-      (SELECT COUNT(*) FROM bug_reports WHERE status = 'open') AS bugs`).bind(now() - 7 * day, now() - 30 * day, now() - 7 * day),
+      (SELECT COUNT(*) FROM bug_reports WHERE status = 'open') AS bugs,
+      (SELECT COUNT(*) FROM reports WHERE status = 'open') AS reports,
+      (SELECT COUNT(*) FROM plays WHERE at > ?) AS plays30`).bind(now() - 7 * day, now() - 30 * day, now() - 7 * day, now() - 30 * day), // active7, active30, new7, plays30
     env.DB.prepare('SELECT CAST(created_at / ? AS INTEGER) AS d, COUNT(*) AS n FROM users WHERE created_at > ? GROUP BY d').bind(day, since),
     env.DB.prepare('SELECT CAST(at / ? AS INTEGER) AS d, COUNT(*) AS n FROM listens WHERE at > ? GROUP BY d').bind(day, since),
+    env.DB.prepare('SELECT CAST(at / ? AS INTEGER) AS d, COUNT(*) AS n FROM plays WHERE at > ? GROUP BY d').bind(day, since),
     env.DB.prepare(`SELECT x.id, x.username, x.display_name, x.avatar, x.last_seen, x.created_at,
         (SELECT COUNT(*) FROM tracks t JOIN projects p ON p.id = t.project_id WHERE p.owner_id = x.id AND t.deleted_at IS NULL) AS tracks,
         (SELECT COALESCE(SUM(v.size), 0) FROM track_versions v JOIN tracks t ON t.id = v.track_id JOIN projects p ON p.id = t.project_id WHERE p.owner_id = x.id) AS bytes
@@ -996,7 +1033,7 @@ on('GET', '/api/admin/analytics', async (req, env, b, p, url, ctx, u) => {
   ]);
   // one entry per day for the last 30 days (days with nothing are 0)
   const days = (rows) => { const m = new Map(rows.map(r => [r.d, r.n])), today = Math.floor(now() / day); return Array.from({ length: 30 }, (_, i) => ({ day: (today - 29 + i) * day, n: m.get(today - 29 + i) || 0 })); };
-  return json({ totals: tot.results[0], signups: days(signups.results), plays: days(plays.results), top: top.results });
+  return json({ totals: tot.results[0], signups: days(signups.results), plays: days(plays.results), appPlays: days(appPlays.results), top: top.results });
 });
 
 // Bug reports: anyone signed in can send one (a few per address per 15 minutes); the admin gets a notification.
@@ -1073,6 +1110,7 @@ async function deleteAccount(env, id) {
     env.DB.prepare('DELETE FROM project_members WHERE user_id = ?').bind(id),
     env.DB.prepare('DELETE FROM inbox WHERE user_id = ?').bind(id),
     env.DB.prepare('DELETE FROM playlist_tracks WHERE playlist_id IN (SELECT id FROM playlists WHERE owner_id = ?)').bind(id),
+    env.DB.prepare("DELETE FROM shares WHERE kind = 'playlist' AND target_id IN (SELECT id FROM playlists WHERE owner_id = ?)").bind(id),
     env.DB.prepare('DELETE FROM playlists WHERE owner_id = ?').bind(id),
     env.DB.prepare('DELETE FROM users WHERE id = ?').bind(id),
   ]);
@@ -1239,10 +1277,16 @@ async function openShare(env, token) {
   if (!s || s.revoked || (s.expires_at && s.expires_at < now())) return null;
   const target = s.kind === 'project'
     ? await env.DB.prepare('SELECT owner_id FROM projects WHERE id = ? AND deleted_at IS NULL').bind(s.target_id).first()
-    : await env.DB.prepare('SELECT p.owner_id FROM tracks t JOIN projects p ON p.id = t.project_id WHERE t.id = ? AND t.deleted_at IS NULL AND p.deleted_at IS NULL').bind(s.target_id).first();
+    : s.kind === 'playlist'
+      ? await env.DB.prepare('SELECT owner_id FROM playlists WHERE id = ?').bind(s.target_id).first()
+      : await env.DB.prepare('SELECT p.owner_id FROM tracks t JOIN projects p ON p.id = t.project_id WHERE t.id = ? AND t.deleted_at IS NULL AND p.deleted_at IS NULL').bind(s.target_id).first();
   return target ? { ...s, owner_id: target.owner_id } : null;
 }
+// A playlist link only carries the sharer's own tracks: songs from projects other people shared with them stay private.
 async function shareTracks(env, s) {
+  if (s.kind === 'playlist') return (await env.DB.prepare(`SELECT t.id, t.name, t.duration, COALESCE(NULLIF(t.cover, ''), p.cover) AS cover, t.artist, t.peaks, t.size, t.file_key, t.mark
+    FROM playlist_tracks pt JOIN tracks t ON t.id = pt.track_id JOIN projects p ON p.id = t.project_id
+    WHERE pt.playlist_id = ? AND t.deleted_at IS NULL AND p.deleted_at IS NULL AND p.owner_id = ? ORDER BY pt.position, pt.added_at`).bind(s.target_id, s.owner_id).all()).results;
   const q = s.kind === 'project'
     ? env.DB.prepare('SELECT id, name, duration, cover, artist, peaks, size, file_key, mark FROM tracks WHERE project_id = ? AND deleted_at IS NULL ORDER BY position, created_at').bind(s.target_id)
     : env.DB.prepare('SELECT id, name, duration, cover, artist, peaks, size, file_key, mark FROM tracks WHERE id = ? AND deleted_at IS NULL').bind(s.target_id);
@@ -1293,6 +1337,22 @@ async function previewFile(env, req, t, owner) {
   return new Response(r.body, { status: m ? 206 : 200, headers });
 }
 
+// Someone reports a share link (copyright, something harmful, spam). A few per address, then a wait; the owner is told.
+const REPORT_REASONS = { copyright: 'Copyright', harmful: 'Harmful or illegal', spam: 'Spam or scam', other: 'Something else' };
+async function reportShare(req, env, ctx, url, s, viewer) {
+  const lockKey = 'report:' + clientIp(req), wait = await lockedFor(env, lockKey);
+  if (wait) return fail(`You've sent a few reports just now. Try again in ${Math.ceil(wait / 60)} min.`, 429);
+  const b = await req.json().catch(() => ({}));
+  const reason = REPORT_REASONS[b.reason] ? b.reason : 'other';
+  const details = String(b.details || '').trim().slice(0, 2000), contact = cleanName(b.contact, 200);
+  if (reason === 'copyright' && !details) return fail('Say which work is yours, and where it appears here.');
+  await env.DB.prepare('INSERT INTO reports (share_token, reason, details, contact, reporter_id, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .bind(s.token, reason, details || null, contact || null, viewer?.id || null, now()).run();
+  await recordFail(env, lockKey); // counts towards the few-per-address limit
+  notify(ctx, env, OWNER, { title: `A share link was reported: ${REPORT_REASONS[reason]}`, body: details.slice(0, 200) || 'No details given', tag: 'report', url: '/?reports=1' }, url.origin);
+  return json({ ok: true });
+}
+
 async function handleShare(req, env, url, ctx) {
   const [, , token, action, trackId] = url.pathname.split('/');
   const s = await openShare(env, token);
@@ -1312,11 +1372,12 @@ async function handleShare(req, env, url, ctx) {
     }
     const title = s.kind === 'project'
       ? await env.DB.prepare('SELECT name, cover FROM projects WHERE id = ?').bind(s.target_id).first()
+      : s.kind === 'playlist' ? await env.DB.prepare('SELECT name, NULL AS cover FROM playlists WHERE id = ?').bind(s.target_id).first()
       : await env.DB.prepare("SELECT t.name, COALESCE(NULLIF(t.cover, ''), p.cover) AS cover FROM tracks t JOIN projects p ON p.id = t.project_id WHERE t.id = ?").bind(s.target_id).first(); // a track without its own cover shows its project's
     const tracks = (await shareTracks(env, s)).map(({ file_key, ...t }) => ({ ...t, ext: drive.isDriveKey(file_key) ? 'mp3' : ext(file_key) }));
     const viewer = await userFromCookie(req, env);
     const saved = viewer && await env.DB.prepare('SELECT 1 FROM saved_shares WHERE user_id = ? AND token = ?').bind(viewer.id, token).first();
-    return json({ ...title, allow_download: !!s.allow_download, public: !!s.public, tracks, preview: PREVIEW_SECS,
+    return json({ ...title, kind: s.kind, allow_download: !!s.allow_download, public: !!s.public, tracks, preview: PREVIEW_SECS,
       viewer: viewer ? { username: viewer.username, name: nameOf(viewer), avatar: viewer.avatar || null, mine: viewer.id === s.owner_id, saved: !!saved } : null }, 200, headers);
   }
   if (!(await shareAllowed(req, env, s))) return fail('Password needed', 401);
@@ -1324,8 +1385,10 @@ async function handleShare(req, env, url, ctx) {
   const owner = () => getUser(env, s.owner_id);
   const viewer = await userFromCookie(req, env); // signed in to [vault]? (full songs, downloads, saving)
 
+  if (action === 'report' && req.method === 'POST') return reportShare(req, env, ctx, url, s, viewer);
   if (action === 'save') {
     if (!viewer) return fail('Sign in to save this', 401);
+    if (s.kind === 'playlist') return fail("Playlists can't be saved to a library yet. Keep the link instead.");
     if (req.method === 'DELETE') await env.DB.prepare('DELETE FROM saved_shares WHERE user_id = ? AND token = ?').bind(viewer.id, token).run();
     else await env.DB.prepare('INSERT OR IGNORE INTO saved_shares (user_id, token, created_at) VALUES (?, ?, ?)').bind(viewer.id, token, now()).run();
     return json({ saved: req.method !== 'DELETE' });
@@ -1344,7 +1407,8 @@ async function handleShare(req, env, url, ctx) {
   }
   if (action === 'cover') {
     const key = url.searchParams.get('k');
-    const p = await env.DB.prepare(s.kind === 'project' ? 'SELECT cover FROM projects WHERE id = ?' : 'SELECT p.cover FROM tracks t JOIN projects p ON p.id = t.project_id WHERE t.id = ?').bind(s.target_id).first();
+    const p = s.kind === 'playlist' ? null // its tracks carry their covers (their project's when they have none)
+      : await env.DB.prepare(s.kind === 'project' ? 'SELECT cover FROM projects WHERE id = ?' : 'SELECT p.cover FROM tracks t JOIN projects p ON p.id = t.project_id WHERE t.id = ?').bind(s.target_id).first();
     if (!key || !(p?.cover === key || tracks.some(t => t.cover === key))) return fail('Not found', 404);
     return coverFile(env, key, 'public', await owner());
   }

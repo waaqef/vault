@@ -41,6 +41,8 @@ audio{position:fixed;left:0;right:0;margin:0 auto;bottom:calc(16px + env(safe-ar
 .home:hover,.top a.pill:hover{background:var(--grain) 0 0/140px,linear-gradient(180deg,rgba(255,255,255,.16),rgba(255,255,255,.06))}.home:active,.top a.pill:active{transform:scale(.97)}
 .home.light,.top a.pill.main{color:#111;text-shadow:none;background:var(--grain) 0 0/140px,linear-gradient(180deg,#fff,#dcdcdc);box-shadow:inset 0 1px 0 #fff,inset 0 -1px 0 rgba(0,0,0,.12),0 6px 18px rgba(0,0,0,.35)}
 .home.light:hover,.top a.pill.main:hover{background:var(--grain) 0 0/140px,linear-gradient(180deg,#fff,#ececec)}
+.rep{margin-top:40px;padding-top:16px;border-top:1px solid rgba(255,255,255,.08)}.rep .linkish{color:var(--fg3);font-size:12px}
+.report select,.report textarea{font:inherit;color:var(--fg);background:var(--f1);border:1px solid transparent;border-radius:14px;padding:10px 14px}.report textarea{resize:vertical;min-height:72px}.report select{height:42px;border-radius:999px}
 .acts2{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px}.home svg{width:17px;height:17px;flex:none;opacity:.92}.top a.pill{height:36px;padding:0 14px;font-size:13px}
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(84px + env(safe-area-inset-bottom));z-index:9;max-width:calc(100% - 32px);padding:10px 16px;border-radius:14px;background:#2a2a2a;color:var(--fg);box-shadow:0 10px 30px rgba(0,0,0,.5),inset 0 0 0 1px rgba(255,99,90,.5);font-size:13px}
 .mw{display:block;width:80px;height:20px}
@@ -282,7 +284,7 @@ function show(d) {
   addEventListener('pagehide', () => progress(true));
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') progress(true); });
   let saveBtn = '';
-  if (d.viewer && !d.viewer.mine) {
+  if (d.viewer && !d.viewer.mine && d.kind !== 'playlist') {
     saveBtn = el('button', { className: 'save' });
     const paint = () => { saveBtn.classList.toggle('on', d.viewer.saved); saveBtn.textContent = d.viewer.saved ? '\u2713 In your library' : '+ Save to my library'; };
     saveBtn.onclick = async () => {
@@ -292,7 +294,27 @@ function show(d) {
     };
     paint();
   }
-  m.replaceChildren(brand(), el('div', { className: 'head' }, cover, el('div', {}, el('div', { className: 'mono', textContent: '[shared with you]' }), el('h1', { textContent: d.name }), el('div', { className: 'mono', textContent: d.tracks.length + (d.tracks.length === 1 ? ' track' : ' tracks') + (d.allow_download ? ' · downloads on' : '') }), saveBtn)), gate || '', now, ...rows);
+  // Report this link (copyright, harmful, spam): a small form at the bottom
+  const report = (() => {
+    const open = el('button', { className: 'linkish', type: 'button', textContent: 'Report this link' });
+    const why = el('select', {}, ...[['copyright', 'It uses my music (copyright)'], ['harmful', 'Harmful or illegal'], ['spam', 'Spam or a scam'], ['other', 'Something else']].map(([v, l]) => el('option', { value: v, textContent: l })));
+    const details = el('textarea', { rows: 3, maxLength: 2000, placeholder: 'What is wrong? For copyright: which work is yours, and which track here uses it.' });
+    const contact = el('input', { maxLength: 200, placeholder: 'How to reach you (optional)' });
+    const msg = el('div', { className: 'err' }), send = el('button', { textContent: 'Send report' });
+    const f = el('form', { className: 'req report', hidden: true }, why, details, contact, send, msg);
+    f.onsubmit = async e => {
+      e.preventDefault(); send.disabled = true; msg.textContent = '';
+      try {
+        const r = await fetch(base + '/report', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ reason: why.value, details: details.value, contact: contact.value }) });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || 'That didn\u2019t send');
+        f.replaceChildren(el('p', { className: 'mono', textContent: '[thanks: the report was sent and will be looked at]' }));
+      } catch (x) { msg.textContent = x.message; send.disabled = false; }
+    };
+    open.onclick = () => { open.remove(); f.hidden = false; details.focus(); };
+    return el('footer', { className: 'rep' }, open, f);
+  })();
+  m.replaceChildren(brand(), el('div', { className: 'head' }, cover, el('div', {}, el('div', { className: 'mono', textContent: '[shared with you]' }), el('h1', { textContent: d.name }), el('div', { className: 'mono', textContent: d.tracks.length + (d.tracks.length === 1 ? ' track' : ' tracks') + (d.allow_download ? ' · downloads on' : '') }), saveBtn)), gate || '', now, ...rows, report);
 }
 open();
 </script>` : ''}

@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS track_versions (
   size INTEGER NOT NULL, duration REAL, note TEXT, created_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS shares (
-  token TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('project', 'track')),
+  token TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('project', 'track', 'playlist')),
   target_id TEXT NOT NULL, password_hash TEXT, expires_at INTEGER,
   revoked INTEGER NOT NULL DEFAULT 0, allow_download INTEGER NOT NULL DEFAULT 0, public INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL
 );
@@ -63,3 +63,6 @@ CREATE TABLE IF NOT EXISTS bug_reports (id INTEGER PRIMARY KEY AUTOINCREMENT, us
 CREATE TABLE IF NOT EXISTS playlists (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, name TEXT NOT NULL, created_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS playlist_tracks (playlist_id TEXT NOT NULL, track_id TEXT NOT NULL, position REAL NOT NULL DEFAULT 0, added_at INTEGER NOT NULL, PRIMARY KEY (playlist_id, track_id));
 CREATE INDEX IF NOT EXISTS playlists_owner ON playlists (owner_id);
+CREATE TABLE IF NOT EXISTS reports (id INTEGER PRIMARY KEY AUTOINCREMENT, share_token TEXT NOT NULL, reason TEXT NOT NULL, details TEXT, contact TEXT, reporter_id TEXT, status TEXT NOT NULL DEFAULT 'open', created_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS plays (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, track_id TEXT NOT NULL, at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS plays_at ON plays (at);

@@ -5,7 +5,7 @@ import { decodeAudio, bpmKeyOf, parseName } from './detect.js';
 import { peaksOf, waveSvg } from './wave.js';
 import { makeZip, safeName } from './zip.js';
 
-const APP_VERSION = '[vault] v2.8.2'; // shown in Settings and sent with bug reports
+const APP_VERSION = '[vault] v2.9'; // shown in Settings and sent with bug reports
 // ---- helpers ------------------------------------------------------------------
 const $ = (s, el = document) => el.querySelector(s);
 function h(tag, attrs = {}, ...kids) {
@@ -249,6 +249,7 @@ async function load() {
   if ((S.view.type === 'project' && !projectOf(S.view.id)) || (S.view.type === 'playlist' && !playlistOf(S.view.id))) S.view = { type: 'all' };
   render();
   driveBack();
+  if (new URLSearchParams(location.search).has('reports')) { history.replaceState(null, '', '/library'); if (S.me?.isAdmin) reportsDialog(); }
   if (new URLSearchParams(location.search).has('bugs')) { history.replaceState(null, '', '/library'); if (S.me?.isAdmin) bugsDialog(); }
   const deep = new URLSearchParams(location.search).get('track');
   if (deep) { history.replaceState(null, '', '/library'); if (trackOf(deep)) (canEdit(trackOf(deep).project_id) ? detailsDialog : commentsDialog)(trackOf(deep)); }
@@ -561,6 +562,7 @@ function renderMain() {
     S.select && h('span', { className: 'mono arrange-hint' }, '[tap tracks to select]'),
     p && !shared && !busy && h('button', { className: 'btn', 'aria-label': 'Share', onclick: () => shareDialog('project', p.id, p.name) }, labelled('share', 'Share')),
     p && !busy && h('button', { className: 'icon-btn', style: { background: 'var(--fill-2)' }, 'aria-label': 'Project options', onclick: () => projectMenu(p) }, icon('more', 18)),
+    pl && !busy && list.length > 0 && h('button', { className: 'btn', 'aria-label': 'Share', onclick: () => shareDialog('playlist', pl.id, pl.name) }, labelled('share', 'Share')),
     pl && !busy && h('button', { className: 'icon-btn', style: { background: 'var(--fill-2)' }, 'aria-label': 'Playlist options', onclick: () => playlistMenu(pl) }, icon('more', 18)),
   ];
   const dur = list.reduce((s, t) => s + (t.duration || 0), 0);
@@ -1694,6 +1696,7 @@ async function inboxDialog() {
     if (track && trackOf(track)) (canEdit(trackOf(track).project_id) ? detailsDialog : commentsDialog)(trackOf(track));
     else if (/^\/s\/[0-9a-f]{32}$/.test(url || '')) location.href = url;
     else if (url === '/?bugs=1' && S.me?.isAdmin) bugsDialog();
+    else if (url === '/?reports=1' && S.me?.isAdmin) reportsDialog();
   };
   let lastTitle = '';
   const rows = await api('/inbox').catch(e => (oops(e), []));
@@ -2033,8 +2036,13 @@ async function playList(list, i, { shuffle } = {}) {
   if (shuffle !== undefined) { P.shuffle = shuffle; store.set('shuffle', shuffle); }
   await playAt(i);
 }
+let playCounted = true;
+const countPlay = () => { if (playCounted || !cur || !realSrc() || !S.online) return; playCounted = true; api('/plays', { method: 'POST', body: { track_id: cur.id } }).catch(() => {}); };
+audio.addEventListener('timeupdate', () => { if (audio.currentTime >= 10) countPlay(); });
+audio.addEventListener('ended', countPlay);
 async function playAt(i, { remember = true } = {}) {
   if (i < 0 || i >= queue.length) return;
+  playCounted = false;
   if (remember && cur && qi >= 0 && qi !== i) P.history.push(qi);
   qi = i; cur = queue[i];
   store.set('recent', [cur.id, ...store.get('recent', []).filter(id => id !== cur.id)].slice(0, 20));
@@ -2507,6 +2515,8 @@ async function shareDialog(kind, target_id, name) {
   h('div', { className: 'btns', style: { justifyContent: 'flex-start' } }, h('button', { className: 'btn primary' }, 'Create link')),
   h('div', { className: 'field' }, h('span', { className: 'field-l' }, 'Links · downloads · public · who listened'), list),
   kind === 'project' && peopleSection(target_id),
+  kind === 'playlist' && (n => n > 0 && h('small', { className: 'people-note' }, `${n} ${n === 1 ? 'track is' : 'tracks are'} from projects other people shared with you, so ${n === 1 ? "it's" : "they're"} left out of the link. Only your own tracks are shared.`))(
+    (playlistOf(target_id)?.ids || []).map(trackOf).filter(t => t && isShared(t.project_id)).length),
   h('div', { className: 'btns' }, h('button', { type: 'button', className: 'btn ghost', onclick: () => d.close() }, 'Done'))));
   refresh();
 }
@@ -2701,6 +2711,7 @@ async function settingsDialog(only) {
         h('button', { className: 'btn danger', onclick: () => { d.close(); deleteAccountDialog(); } }, 'Delete'))),
     !only && h('div', { className: 'set-sec' }, h('h3', {}, '[support]'),
       row('Report a bug', 'Something broken or confusing? Tell me what happened.', h('button', { className: 'btn', onclick: () => { d.close(); bugDialog(); } }, 'Report')),
+      S.me?.isAdmin && row('Reported links', 'Share links people have reported', h('button', { className: 'btn', onclick: () => { d.close(); reportsDialog(); } }, 'Open')),
       S.me?.isAdmin && row('Bug reports', 'What people have reported', h('button', { className: 'btn', onclick: () => { d.close(); bugsDialog(); } }, 'Open')),
       row('Support [vault]', 'Free, no ads. Tips help keep it that way.', h('a', { className: 'btn', href: 'https://ko-fi.com/choseroxy', target: '_blank', rel: 'noopener' }, 'Tip ☕'))),
     h('div', { className: 'btns' }, h('span', { className: 'mono', style: { marginRight: 'auto', color: 'var(--fg-3)', alignSelf: 'center' } }, APP_VERSION),
@@ -2947,6 +2958,7 @@ function addToPlaylist(tracks) {
 function playlistMenu(pl) {
   const tracks = () => pl.ids.map(trackOf).filter(Boolean);
   sheet([
+    { icon: 'share', label: 'Share', run: () => shareDialog('playlist', pl.id, pl.name) },
     { icon: 'pencil', label: 'Rename', async run() { const name = await prompt('Rename playlist', pl.name, { max: 120 }); name && api(`/playlists/${pl.id}`, { method: 'PATCH', body: { name } }).then(load, oops); } },
     { icon: 'download', label: 'Save all offline', run: () => saveAllOffline(tracks()) },
     '-',
@@ -2984,14 +2996,50 @@ async function analyticsDialog() {
       tile('[tracks]', n(t.tracks), `${n(t.projects)} projects`),
       tile('[storage]', fmtBytes(t.bytes), 'all versions, all accounts'),
       tile('[share links]', n(t.links), `${n(t.listens)} plays · ${n(t.comments)} comments`),
-      tile('[playlists]', n(t.playlists), `${n(t.bugs)} open bug ${t.bugs === 1 ? 'report' : 'reports'}`)),
+      tile('[plays · 30 days]', n(t.plays30), 'in the app'),
+      tile('[to look at]', n(t.bugs + t.reports), `${n(t.bugs)} bug ${t.bugs === 1 ? 'report' : 'reports'} · ${n(t.reports)} link ${t.reports === 1 ? 'report' : 'reports'}`),
+      tile('[playlists]', n(t.playlists))),
     bars('New accounts', a.signups, 'sign-up'),
+    bars('Plays in the app', a.appPlays, 'play'),
     bars('Plays on share links', a.plays, 'play'),
     h('div', { className: 'field' }, h('span', { className: 'field-l' }, 'Most tracks'),
       h('div', { className: 'list' }, a.top.map(u => h('div', { className: 'item' }, avatarEl(u),
         h('span', { className: 'grow' }, nameOf(u), h('small', { className: 'muted' }, ` @${u.username}`)),
         h('small', { className: 'mono an-top' }, `${n(u.tracks)} tracks · ${fmtBytes(u.bytes)} · ${u.last_seen ? 'seen ' + fmtAdded(u.last_seen).toLowerCase() : 'not seen yet'}`))))),
-    h('small', { className: 'muted' }, 'Active = opened [vault] (counted at most every 10 minutes). Plays count share-link listens, not plays inside the app.'));
+    h('small', { className: 'muted' }, 'Active = opened [vault] (counted at most every 10 minutes). A play counts once a song has played for 10 seconds.'));
+}
+
+// ---- reported share links (admin) ----------------------------------------------------------------
+// Open the link to see it, turn it off, turn off its owner's account, then mark the report done.
+const REPORT_REASONS = { copyright: 'Copyright', harmful: 'Harmful or illegal', spam: 'Spam or scam', other: 'Something else' };
+async function reportsDialog() {
+  const list = h('div', { className: 'list' }, h('div', { className: 'muted' }, 'Loading…'));
+  const d = dialog(h('div', { className: 'stack' }, h('h2', {}, 'Reported links'), list,
+    h('div', { className: 'btns' }, h('button', { className: 'btn primary', onclick: () => d.close() }, 'Done'))), { className: 'settings-dlg wide' });
+  const patch = (r, body) => api(`/admin/reports/${r.id}`, { method: 'PATCH', body }).then(draw, oops);
+  async function draw() {
+    const rows = await api('/admin/reports').catch(e => (oops(e), []));
+    fill(list, rows.length ? rows.map(r => {
+      const done = r.status === 'done', gone = !r.kind;
+      const canTurnOff = r.owner_id && r.owner_id !== 'owner' && (S.me.owner || !r.owner_admin);
+      return h('div', { className: 'item bug' + (done ? ' fixed' : '') },
+        h('div', { className: 'grow' },
+          h('b', {}, REPORT_REASONS[r.reason] || r.reason), h('span', { className: 'mono', style: { color: 'var(--fg-3)', fontSize: '11px' } }, ` · ${fmtDate(r.created_at)}${done ? ' · done' : ''}`),
+          h('div', { className: 'bug-text' }, gone ? 'That link has since been deleted.' : `${r.kind} “${r.target_name || '?'}” by ${r.owner_name || r.owner_username || '?'}${r.revoked ? ' · link is off' : ''}${r.owner_disabled ? ' · account is off' : ''}`),
+          r.details && h('div', { className: 'bug-text muted' }, r.details),
+          r.contact && h('small', { className: 'mono', style: { color: 'var(--fg-3)' } }, `contact: ${r.contact}`)),
+        h('span', { className: 'btns', style: { margin: 0, flexWrap: 'wrap', justifyContent: 'flex-end' } },
+          !gone && h('a', { className: 'btn', href: `/s/${r.share_token}`, target: '_blank', rel: 'noopener' }, 'Open'),
+          !gone && !r.revoked && h('button', { className: 'btn', onclick: () => patch(r, { revoke: true }) }, 'Turn link off'),
+          !gone && canTurnOff && !r.owner_disabled && h('button', { className: 'btn danger', async onclick() {
+            if (!(await confirm(`Turn off ${r.owner_name || r.owner_username}'s account?`, 'They are signed out and can\'t sign in or open their links until you turn it back on in People.', 'Turn off'))) return;
+            await api(`/admin/users/${r.owner_id}`, { method: 'PATCH', body: { disabled: true } }).then(draw, oops);
+          } }, 'Turn off account'),
+          h('button', { className: 'btn ghost', onclick: () => patch(r, { status: done ? 'open' : 'done' }) }, done ? 'Reopen' : 'Done'),
+          h('button', { className: 'icon-btn sm', 'aria-label': 'Delete report', onclick: () => api(`/admin/reports/${r.id}`, { method: 'DELETE' }).then(draw, oops) }, icon('trash', 15))));
+    }) : h('div', { className: 'muted' }, 'No reports.'));
+  }
+  draw();
 }
 
 // ---- bug reports ------------------------------------------------------------------------------

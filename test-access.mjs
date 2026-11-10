@@ -117,6 +117,26 @@ try {
   const { data: { id: lmix } } = await call(listener, 'POST', '/api/playlists', { name: 'mine', track_ids: [track] });
   assert.equal((await call(listener, 'GET', '/api/tree')).data.playlists.find(p => p.id === lmix).ids.length, 1, 'a listener can add a shared track to a playlist');
   assert.equal((await call(stranger, 'PATCH', `/api/playlists/${lmix}`, { name: 'x' })).status, 404, "someone else can't rename your playlist");
+  // a playlist link only carries the sharer's own tracks (lisa's playlist holds the owner's track: it stays out)
+  const { data: { token: ltok } } = await call(listener, 'POST', '/api/shares', { kind: 'playlist', target_id: lmix, public: true });
+  assert.equal((await call(null, 'POST', `/s/${ltok}/open`, {})).data.tracks.length, 0, "a playlist link doesn't share other people's songs");
+  assert.equal((await call(null, 'GET', `/s/${ltok}/audio/${track}?full=1`)).status, 404, "and their audio can't be fetched through it");
+  const { data: { id: omix } } = await call(owner, 'POST', '/api/playlists', { name: 'own', track_ids: [track] });
+  const { data: { token: otok } } = await call(owner, 'POST', '/api/shares', { kind: 'playlist', target_id: omix, public: true });
+  assert.equal((await call(null, 'POST', `/s/${otok}/open`, {})).data.tracks.length, 1, "a playlist link shares the sharer's own songs");
+
+  // reporting a link: anyone can; admins see it and can turn the link off
+  assert.equal((await call(null, 'POST', `/s/${otok}/report`, { reason: 'spam', details: 'test' }, { 'cf-connecting-ip': '10.0.4.1' })).status, 200, 'a visitor reports a link');
+  assert.equal((await call(stranger, 'GET', '/api/admin/reports')).status, 403, 'only admins see reports');
+  const [rep] = (await call(owner, 'GET', '/api/admin/reports')).data;
+  assert.equal(rep.share_token, otok, 'the report reaches the admin');
+  await call(owner, 'PATCH', `/api/admin/reports/${rep.id}`, { revoke: true, status: 'done' });
+  assert.equal((await call(null, 'POST', `/s/${otok}/open`, {})).status, 404, 'turning the link off from the report works');
+
+  // plays inside the app count, but only for tracks you can play
+  await call(listener, 'POST', '/api/plays', { track_id: track });
+  await call(stranger, 'POST', '/api/plays', { track_id: track });
+  assert.equal((await call(owner, 'GET', '/api/admin/analytics')).data.totals.plays30, 1, 'in-app plays are counted');
   assert.equal((await call(stranger, 'GET', '/api/search?q=nice')).data.comments.length, 0, "a stranger's search doesn't find others' comments");
   assert.equal((await call(listener, 'GET', '/api/search?q=nice')).data.comments.length, 1, 'search finds comments on projects you are on');
 

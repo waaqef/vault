@@ -8,6 +8,10 @@ binding = "ASSETS"
 not_found_handling = "404-page"
 run_worker_first = ["/api/*", "/s/*", "/google6e583667ce62f72e.html", "/sw.js", "/", "/login", "/library", "/about"]
 
+# Workers Logs (free): server errors and console output, searchable in the dashboard under this Worker → Logs.
+[observability]
+enabled = true
+
 # This deploy's id: stamped into the service worker so every deploy refreshes the app's offline copy.
 [version_metadata]
 binding = "VERSION"
