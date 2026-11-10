@@ -897,6 +897,31 @@ const drivePage = msg => `<!doctype html><meta charset="utf-8"><meta name="viewp
 
 // ---- admin: people ----
 const adminOnly = u => (u.is_admin ? null : fail('Only the admin can do that', 403));
+// Bug reports: anyone signed in can send one (a few per address per 15 minutes); the admin gets a notification.
+on('POST', '/api/bugs', async (req, env, b, p, url, ctx, u) => {
+  const lockKey = 'bug:' + clientIp(req), wait = await lockedFor(env, lockKey);
+  if (wait) return fail(`You've sent a few reports just now. Try again in ${Math.ceil(wait / 60)} min.`, 429);
+  const text = String(b.text || '').trim().slice(0, 4000);
+  if (text.length < 5) return fail('Say a little about what went wrong.');
+  const info = b.info && typeof b.info === 'object' ? JSON.stringify(b.info).slice(0, 8000) : null;
+  await env.DB.prepare('INSERT INTO bug_reports (user_id, text, info, created_at) VALUES (?, ?, ?, ?)').bind(u.id, text, info, now()).run();
+  await recordFail(env, lockKey); // counts towards the few-per-address limit
+  if (u.id !== OWNER) notify(ctx, env, OWNER, { title: `${nameOf(u)} reported a bug`, body: text.slice(0, 200), tag: 'bug', url: '/?bugs=1' }, url.origin);
+  return json({ ok: true });
+});
+on('GET', '/api/admin/bugs', async (req, env, b, p, url, ctx, u) =>
+  adminOnly(u) || json((await env.DB.prepare(`SELECT r.id, r.text, r.info, r.status, r.created_at, x.username, x.display_name, x.avatar
+    FROM bug_reports r LEFT JOIN users x ON x.id = r.user_id ORDER BY r.status = 'open' DESC, r.created_at DESC LIMIT 200`).all()).results));
+on('PATCH', '/api/admin/bugs/:id', async (req, env, b, { id }, url, ctx, u) => {
+  if (adminOnly(u)) return adminOnly(u);
+  await env.DB.prepare('UPDATE bug_reports SET status = ? WHERE id = ?').bind(b.status === 'fixed' ? 'fixed' : 'open', Number(id) || 0).run();
+  return json({ ok: true });
+});
+on('DELETE', '/api/admin/bugs/:id', async (req, env, b, { id }, url, ctx, u) => {
+  if (adminOnly(u)) return adminOnly(u);
+  await env.DB.prepare('DELETE FROM bug_reports WHERE id = ?').bind(Number(id) || 0).run();
+  return json({ ok: true });
+});
 on('GET', '/api/admin/users', async (req, env, b, p, url, ctx, u) => {
   if (adminOnly(u)) return adminOnly(u);
   const { results } = await env.DB.prepare(`SELECT x.id, x.username, x.display_name, x.avatar, x.is_admin, x.storage, x.disabled, x.created_at, x.drive_refresh IS NOT NULL AS drive,

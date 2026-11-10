@@ -5,6 +5,7 @@ import { decodeAudio, bpmKeyOf, parseName } from './detect.js';
 import { peaksOf, waveSvg } from './wave.js';
 import { makeZip, safeName } from './zip.js';
 
+const APP_VERSION = '[vault] v2.7'; // shown in Settings and sent with bug reports
 // ---- helpers ------------------------------------------------------------------
 const $ = (s, el = document) => el.querySelector(s);
 function h(tag, attrs = {}, ...kids) {
@@ -87,7 +88,16 @@ export function toast(msg, { error = false, ms = 3500, action, quiet = false } =
   if (ms) setTimeout(() => el.remove(), ms);
   return el;
 }
-const oops = e => e.message !== 'Not logged in' && toast(e.message, { error: true, ms: 6000 });
+// Error messages offer to report the problem; the last few are remembered for the report.
+const recentErrors = [];
+const noteError = msg => { recentErrors.push(`${new Date().toISOString().slice(11, 19)} ${String(msg).slice(0, 300)}`); if (recentErrors.length > 8) recentErrors.shift(); };
+addEventListener('error', e => noteError(`${e.message} (${(e.filename || '').split('/').pop()}:${e.lineno})`));
+addEventListener('unhandledrejection', e => noteError(e.reason?.message || e.reason));
+const oops = e => {
+  if (e.message === 'Not logged in') return;
+  noteError(e.message);
+  return toast(e.message, { error: true, ms: 7000, action: S.me && { label: 'Report', run: () => bugDialog(e.message) } });
+};
 
 // locked: can't be closed by Escape or clicking outside (login, Connect Drive, first project)
 function dialog(content, { className = '', locked = false } = {}) {
@@ -205,6 +215,7 @@ async function load() {
   if (S.view.type === 'project' && !projectOf(S.view.id)) S.view = { type: 'all' };
   render();
   driveBack();
+  if (new URLSearchParams(location.search).has('bugs')) { history.replaceState(null, '', '/library'); if (S.me?.isAdmin) bugsDialog(); }
   const deep = new URLSearchParams(location.search).get('track');
   if (deep) { history.replaceState(null, '', '/library'); if (trackOf(deep)) (canEdit(trackOf(deep).project_id) ? detailsDialog : commentsDialog)(trackOf(deep)); }
 }
@@ -1605,6 +1616,7 @@ async function inboxDialog() {
     const track = /^\/\?track=([\w-]+)$/.exec(url || '')?.[1];
     if (track && trackOf(track)) (canEdit(trackOf(track).project_id) ? detailsDialog : commentsDialog)(trackOf(track));
     else if (/^\/s\/[0-9a-f]{32}$/.test(url || '')) location.href = url;
+    else if (url === '/?bugs=1' && S.me?.isAdmin) bugsDialog();
   };
   let lastTitle = '';
   const rows = await api('/inbox').catch(e => (oops(e), []));
@@ -2610,8 +2622,10 @@ async function settingsDialog(only) {
       S.me && !S.me.isAdmin && row('Delete account', 'Deletes your projects and the files [vault] made in your Google Drive. This can\'t be undone.',
         h('button', { className: 'btn danger', onclick: () => { d.close(); deleteAccountDialog(); } }, 'Delete'))),
     !only && h('div', { className: 'set-sec' }, h('h3', {}, '[support]'),
+      row('Report a bug', 'Something broken or confusing? Tell me what happened.', h('button', { className: 'btn', onclick: () => { d.close(); bugDialog(); } }, 'Report')),
+      S.me?.isAdmin && row('Bug reports', 'What people have reported', h('button', { className: 'btn', onclick: () => { d.close(); bugsDialog(); } }, 'Open')),
       row('Support [vault]', 'Free, no ads. Tips help keep it that way.', h('a', { className: 'btn', href: 'https://ko-fi.com/choseroxy', target: '_blank', rel: 'noopener' }, 'Tip ☕'))),
-    h('div', { className: 'btns' }, h('span', { className: 'mono', style: { marginRight: 'auto', color: 'var(--fg-3)', alignSelf: 'center' } }, '[vault] v2.6.1'),
+    h('div', { className: 'btns' }, h('span', { className: 'mono', style: { marginRight: 'auto', color: 'var(--fg-3)', alignSelf: 'center' } }, APP_VERSION),
       h('button', { className: 'btn primary', onclick: () => d.close() }, 'Done'))), { className: 'settings-dlg' });
   if (only) d.querySelectorAll('.set-sec').forEach(sec => sec.querySelector('h3').textContent !== `[${only}]` && sec.remove());
   api('/versions/old').then(({ count, size }) => {
@@ -2804,6 +2818,55 @@ async function shortcutDialog() {
         h('li', {}, 'In that action set ', h('b', {}, 'Method: POST'), '. Add a header ', h('b', {}, 'Authorization'), ' with the value ', h('code', {}, 'Bearer '), ' followed by your key. Set ', h('b', {}, 'Request Body: File'), ' → ', h('i', {}, 'Repeat Item'), '.'),
         h('li', {}, 'Add ', h('b', {}, 'Show Notification'), ' with ', h('i', {}, 'Contents of URL'), ', so you see where it was saved.')),
       h('small', { className: 'muted' }, 'Want a different project? Add ', h('code', {}, '&project=Your Project Name'), ' to the URL. Too many wrong keys locks uploads for 15 minutes.'));
+  }
+  draw();
+}
+
+// ---- bug reports ------------------------------------------------------------------------------
+// Report a bug: what happened, and (if they leave it ticked) the details that help track it down.
+function bugDialog(error = '') {
+  const text = h('textarea', { rows: 5, maxLength: 4000, required: true, placeholder: 'What happened, and what did you expect? Steps to make it happen again help a lot.' });
+  const withInfo = h('input', { type: 'checkbox', className: 'toggle', checked: true, 'aria-label': 'Include details about this device' });
+  const info = () => ({
+    version: APP_VERSION, page: location.pathname + location.search, view: S.view?.type,
+    browser: navigator.userAgent, app: nativeHaptics ? 'iPhone app' : matchMedia('(display-mode: standalone)').matches ? 'Home Screen web app' : 'browser',
+    screen: `${innerWidth}×${innerHeight} @${devicePixelRatio}x`, online: navigator.onLine, playing: cur?.name || null,
+    errors: [...(error ? [`(reporting) ${error}`] : []), ...recentErrors],
+  });
+  const d = dialog(h('form', { className: 'stack', async onsubmit(e) {
+    e.preventDefault();
+    try {
+      await api('/bugs', { method: 'POST', body: { text: text.value, info: withInfo.checked ? info() : null } });
+      d.close(); toast('Thanks! Your report was sent.', { ms: 4000 });
+    } catch (x) { oops(x); }
+  } }, h('h2', {}, 'Report a bug'),
+  error && h('div', { className: 'bug-err mono' }, error),
+  h('label', {}, 'What went wrong', text),
+  h('div', { className: 'set-row' }, h('div', { className: 't' }, 'Include device details', h('small', {}, 'App version, browser, screen size and the last few error messages. Nothing from your library.')), withInfo),
+  h('div', { className: 'btns' }, h('button', { type: 'button', className: 'btn ghost', onclick: () => d.close() }, 'Cancel'), h('button', { className: 'btn primary' }, 'Send report'))), { className: 'settings-dlg' });
+  if (matchMedia('(pointer: fine)').matches) text.focus();
+}
+// Admin: the reports, open ones first. Mark them fixed, or delete them.
+async function bugsDialog() {
+  const list = h('div', { className: 'list' }, h('div', { className: 'muted' }, 'Loading…'));
+  const d = dialog(h('div', { className: 'stack' }, h('h2', {}, 'Bug reports'), list,
+    h('div', { className: 'btns' }, h('button', { className: 'btn primary', onclick: () => d.close() }, 'Done'))), { className: 'settings-dlg wide' });
+  async function draw() {
+    const rows = await api('/admin/bugs').catch(e => (oops(e), []));
+    fill(list, rows.length ? rows.map(r => {
+      let info = null; try { info = JSON.parse(r.info || 'null'); } catch {}
+      const fixed = r.status === 'fixed';
+      return h('div', { className: 'item bug' + (fixed ? ' fixed' : '') },
+        avatarEl(r),
+        h('div', { className: 'grow' },
+          h('b', {}, nameOf(r) || 'Deleted account'), h('span', { className: 'mono', style: { color: 'var(--fg-3)', fontSize: '11px' } }, ` · ${fmtDate(r.created_at)}${fixed ? ' · fixed' : ''}`),
+          h('div', { className: 'bug-text' }, r.text),
+          info && h('details', {}, h('summary', { className: 'mono' }, 'device details'),
+            h('pre', { className: 'bug-info' }, Object.entries(info).filter(([, v]) => v != null && !(Array.isArray(v) && !v.length)).map(([k, v]) => `${k}: ${Array.isArray(v) ? '\n  ' + v.join('\n  ') : v}`).join('\n')))),
+        h('span', { className: 'btns', style: { margin: 0, flexWrap: 'nowrap' } },
+          h('button', { className: 'btn', onclick: () => api(`/admin/bugs/${r.id}`, { method: 'PATCH', body: { status: fixed ? 'open' : 'fixed' } }).then(draw, oops) }, fixed ? 'Reopen' : 'Fixed'),
+          h('button', { className: 'icon-btn sm', 'aria-label': 'Delete report', onclick: () => api(`/admin/bugs/${r.id}`, { method: 'DELETE' }).then(draw, oops) }, icon('trash', 15))));
+    }) : h('div', { className: 'muted' }, 'No reports yet.'));
   }
   draw();
 }
