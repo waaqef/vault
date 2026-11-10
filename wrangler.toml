@@ -23,6 +23,8 @@ database_id = "04c74fa6-2188-4580-b50c-ce580bc6effc"
 B2_ENDPOINT = "https://s3.us-east-005.backblazeb2.com"
 B2_REGION = "us-east-005"
 B2_BUCKET = "untitled-vault"
+# Cloudflare Turnstile ("are you human" on sign-up). This key is public; its secret is set with `npx wrangler secret put TURNSTILE_SECRET`.
+TURNSTILE_SITE_KEY = "0x4AAAAAAF60Az2gM7sE1nUq"
 
 # `npm run dev:local`: everything runs on your computer with a simulated bucket. No accounts needed.
 [env.local.assets]
