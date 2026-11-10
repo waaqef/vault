@@ -23,6 +23,7 @@ const EQ_PRESETS = [
   ['Air', [{ type: 'peaking', freq: 5000, gain: 1, q: 0.8 }, { type: 'highshelf', freq: 12000, gain: 4, q: 0.7 }]],
   ['De-mud', [{ type: 'peaking', freq: 400, gain: -4, q: 1.5 }]],
   ['Kick punch', [{ type: 'highpass', freq: 30, gain: 0, q: 0.71 }, { type: 'peaking', freq: 60, gain: 3, q: 1.2 }, { type: 'peaking', freq: 350, gain: -4, q: 1.5 }, { type: 'peaking', freq: 4000, gain: 3, q: 1.5 }]],
+  ['Steep low cut', [{ type: 'highpass', freq: 60, gain: 0, q: 0.8, slope: 96 }]],
   ['Lo-fi phone', [{ type: 'highpass', freq: 400, gain: 0, q: 0.71 }, { type: 'peaking', freq: 1500, gain: 4, q: 1 }, { type: 'lowpass', freq: 3200, gain: 0, q: 0.71 }]],
 ];
 const COMP_PRESETS = [
@@ -60,10 +61,11 @@ function makeChain(ctx, s) {
   const gain = v => { const g = ctx.createGain(); g.gain.value = db(v); return g; };
   const c = { inG: gain(s.inGain), eq: [], comp: null, makeup: null, lim: null, pan: ctx.createStereoPanner(), outG: gain(s.outGain) };
   c.pan.pan.value = s.pan;
-  if (s.eqOn) c.eq = s.eq.map(b => setBand(ctx.createBiquadFilter(), b));
+  if (s.eqOn) c.eq = s.eq.map(b => bandNodes(ctx, b));
+  c.eqShape = s.eqOn ? eqShape(s.eq) : '';
   if (s.limit.on) c.lim = setLimit(ctx.createDynamicsCompressor(), s.limit);
   const chain = nodes => { nodes = nodes.filter(Boolean); nodes.slice(1).forEach((n, i) => nodes[i].connect(n)); return nodes[nodes.length - 1]; };
-  let last = chain([c.inG, ...c.eq]);
+  let last = chain([c.inG, ...c.eq.flat()]);
   if (s.comp.on) {
     c.comp = setComp(ctx.createDynamicsCompressor(), s.comp);
     c.makeup = ctx.createGain(); c.wet = ctx.createGain(); c.dry = ctx.createGain(); c.sum = ctx.createGain();
@@ -81,6 +83,34 @@ function makeChain(ctx, s) {
 }
 // Web Audio reads a high/low-pass Q as dB of resonance; the dial uses the usual Q (0.71 = a clean slope, no bump), so it's converted.
 function setBand(f, b) { f.type = b.type; f.frequency.value = b.freq; f.Q.value = CUT(b.type) ? 20 * Math.log10(b.q) : b.q; f.gain.value = b.gain; return f; }
+// Each EQ band is one or more filters:
+// - High / low cuts: 12 dB/oct per filter, so 24, 48 and 96 dB/oct stack 2, 4 or 8 of them, tuned as one Butterworth
+//   (flat right up to the corner). Q above 0.71 makes the most resonant stage peak, for a bump at the corner.
+// - Shelves: the browser's shelf filter has no Q, so a shelf with Q away from 0.71 is built from the standard
+//   (RBJ) shelf formulas instead. Those filters can't be changed once made, so moving one rebuilds the chain.
+// - Bells and notches: one filter.
+const SLOPES = [12, 24, 48, 96];
+const isFlatQ = q => Math.abs(q - Math.SQRT1_2) < 0.02; // 0.70 / 0.71: the standard shelf and cut
+const customShelf = b => SHELF(b.type) && !isFlatQ(b.q);
+function shelfCoefs(b, rate) {
+  const A = Math.pow(10, b.gain / 40), w = (2 * Math.PI * Math.min(b.freq, rate * 0.49)) / rate, cos = Math.cos(w), al = Math.sin(w) / (2 * b.q), sq = 2 * Math.sqrt(A) * al;
+  return b.type === 'lowshelf'
+    ? [[A * (A + 1 - (A - 1) * cos + sq), 2 * A * (A - 1 - (A + 1) * cos), A * (A + 1 - (A - 1) * cos - sq)], [A + 1 + (A - 1) * cos + sq, -2 * (A - 1 + (A + 1) * cos), A + 1 + (A - 1) * cos - sq]]
+    : [[A * (A + 1 + (A - 1) * cos + sq), -2 * A * (A - 1 + (A + 1) * cos), A * (A + 1 + (A - 1) * cos - sq)], [A + 1 - (A - 1) * cos + sq, 2 * (A - 1 - (A + 1) * cos), A + 1 - (A - 1) * cos - sq]];
+}
+// the Q of each stacked stage for a flat (Butterworth) cut; the first is the most resonant
+const cutQs = (b) => { const n = (b.slope || 12) / 12; return Array.from({ length: n }, (_, k) => (1 / (2 * Math.sin(((2 * k + 1) * Math.PI) / (4 * n)))) * (k === 0 ? b.q / Math.SQRT1_2 : 1)); };
+function bandNodes(ctx, b) {
+  if (CUT(b.type)) return cutQs(b).map(q => { const f = ctx.createBiquadFilter(); f.type = b.type; f.frequency.value = b.freq; f.Q.value = 20 * Math.log10(q); return f; });
+  if (customShelf(b)) { const [ff, fb] = shelfCoefs(b, ctx.sampleRate); return [ctx.createIIRFilter(ff, fb)]; }
+  return [setBand(ctx.createBiquadFilter(), b)];
+}
+// What needs new filters (not just new settings): the stacking of cuts and the custom shelves' exact values.
+const eqShape = eq => eq.map(b => (CUT(b.type) ? `${b.type}${b.slope || 12}` : customShelf(b) ? `${b.type}:${b.freq}:${b.gain}:${b.q}` : b.type)).join('|');
+function updateBand(nodes, b) {
+  if (CUT(b.type)) cutQs(b).forEach((q, k) => { nodes[k].frequency.value = b.freq; nodes[k].Q.value = 20 * Math.log10(q); });
+  else if (!customShelf(b)) setBand(nodes[0], b);
+}
 function setComp(n, c) {
   n.threshold.value = c.threshold; n.ratio.value = c.ratio; n.knee.value = c.knee;
   n.attack.value = c.attack / 1000; n.release.value = c.release / 1000; return n;
@@ -344,7 +374,8 @@ export async function openEditor(track, app) {
   function live() {
     if (ab) toggleAB(false);
     chain.inG.gain.value = db(s.inGain); chain.outG.gain.value = db(s.outGain); chain.pan.pan.value = s.pan;
-    chain.eq.forEach((f, i) => setBand(f, s.eq[i]));
+    if ((s.eqOn ? eqShape(s.eq) : '') !== chain.eqShape) rebuild(); // a cut's slope or a custom shelf changed: new filters
+    chain.eq.forEach((nodes, i) => updateBand(nodes, s.eq[i]));
     if (chain.comp) { setComp(chain.comp, s.comp); setMix(chain, s.comp); }
     if (chain.lim) setLimit(chain.lim, s.limit);
     if (src && !ab && src.playbackRate.value !== s.varispeed) { offset = pos(); startAt = actx.currentTime; src.playbackRate.value = s.varispeed; }
@@ -717,7 +748,7 @@ export async function openEditor(track, app) {
     g.textAlign = 'start';
     const n = 256, freqs = new Float32Array(n), total = new Float32Array(n).fill(1), own = new Float32Array(n).fill(1), mag = new Float32Array(n), ph = new Float32Array(n);
     for (let i = 0; i < n; i++) freqs[i] = xf((i / (n - 1)) * W, W);
-    if (s.eqOn) chain.eq.forEach((f, j) => { f.getFrequencyResponse(freqs, mag, ph); for (let i = 0; i < n; i++) { total[i] *= mag[i]; if (j === eqSel) own[i] = mag[i]; } });
+    if (s.eqOn) chain.eq.forEach((nodes, j) => nodes.forEach(f => { f.getFrequencyResponse(freqs, mag, ph); for (let i = 0; i < n; i++) { total[i] *= mag[i]; if (j === eqSel) own[i] *= mag[i]; } }));
     const yOf = m => gy(Math.max(-DBR, Math.min(DBR, toDb(m))), H);
     if (s.eqOn && chain.eq[eqSel]) { // the picked band's own shape, faintly, so you can see what that dot does
       g.beginPath(); g.moveTo(0, H / 2); own.forEach((m, i) => g.lineTo((i / (n - 1)) * W, yOf(m))); g.lineTo(W, H / 2); g.closePath();
@@ -739,7 +770,7 @@ export async function openEditor(track, app) {
     const b = s.eq[eqSel]; // what the picked band is set to, top left
     if (b) {
       g.font = `${11 * dpr}px "Plex Mono", monospace`; g.fillStyle = 'rgba(255,255,255,.7)';
-      g.fillText([`${eqSel + 1} ${TYPES[b.type]}`, fmtHz(b.freq), HAS_GAIN(b.type) && dbs(b.gain), !SHELF(b.type) && `Q ${b.q.toFixed(2)}`].filter(Boolean).join('  ·  '), 8 * dpr, 16 * dpr);
+      g.fillText([`${eqSel + 1} ${TYPES[b.type]}`, fmtHz(b.freq), HAS_GAIN(b.type) && dbs(b.gain), `Q ${b.q.toFixed(2)}`, CUT(b.type) && `${b.slope || 12} dB/oct`].filter(Boolean).join('  ·  '), 8 * dpr, 16 * dpr);
     }
   }
   // EQ resets: the whole EQ back to flat, or one band back to how it started (the four starting bands, or a plain bell).
@@ -788,7 +819,7 @@ export async function openEditor(track, app) {
   // Scroll over a dot (or anywhere, for the picked band) to change its Q.
   eqCanvas.addEventListener('wheel', e => {
     const at = nearestDot(e, 40), i = at >= 0 ? at : eqSel, b = s.eq[i];
-    if (!b || SHELF(b.type)) return;
+    if (!b) return;
     e.preventDefault();
     b.q = +Math.max(0.1, Math.min(18, b.q * Math.exp(-Math.sign(e.deltaY) * (e.shiftKey ? 0.02 : 0.08)))).toPrecision(3);
     if (eqSel !== i) { eqSel = i; renderPanel(); }
@@ -894,13 +925,15 @@ export async function openEditor(track, app) {
           power(s.eqOn, () => { s.eqOn = !s.eqOn; })),
         eqCanvas,
         b && h('div', { className: 'ed-modes scroll' },
-          Object.entries(TYPES).map(([v, l]) => h('button', { className: 'mode' + (b.type === v ? ' on' : ''), onclick: () => { if (CUT(v) !== CUT(b.type)) b.q = CUT(v) ? 0.71 : 1; b.type = v; live(); renderPanel(); } }, l)),
+          Object.entries(TYPES).map(([v, l]) => h('button', { className: 'mode' + (b.type === v ? ' on' : ''), onclick: () => { const flat = t => CUT(t) || SHELF(t); if (flat(v) !== flat(b.type) || CUT(v) !== CUT(b.type)) b.q = flat(v) ? 0.71 : 1; b.type = v; live(); renderPanel(); } }, l)),
           h('button', { className: 'mode', title: 'This band back to flat (or double-tap its dot)', onclick: () => resetBand(eqSel) }, 'Reset band'),
           s.eq.length > 1 && h('button', { className: 'mode', 'aria-label': `Remove band ${eqSel + 1}`, onclick: () => { s.eq.splice(eqSel, 1); eqSel = Math.max(0, eqSel - 1); rebuild(); renderPanel(); } }, icon('trash', 14))),
         b && h('div', { className: 'knobs' },
           knob('Freq', 0, 1, 0.001, () => Math.log(b.freq / 20) / Math.log(1000), v => { b.freq = Math.round(20 * Math.pow(1000, v)); eqPreset = null; }, () => fmtHz(b.freq), Math.log(1000 / 20) / Math.log(1000)),
           HAS_GAIN(b.type) && knob('Gain', -DBR, DBR, 0.1, () => b.gain, v => { b.gain = v; eqPreset = null; }, dbs, 0, true),
-          !SHELF(b.type) && knob('Q', 0, 1, 0.001, () => Math.log(b.q / 0.1) / Math.log(180), v => { b.q = +(0.1 * Math.pow(180, v)).toPrecision(3); eqPreset = null; }, () => b.q.toFixed(2), Math.log((CUT(b.type) ? 0.71 : 1) / 0.1) / Math.log(180))),
+          knob('Q', 0, 1, 0.001, () => Math.log(b.q / 0.1) / Math.log(180), v => { b.q = +(0.1 * Math.pow(180, v)).toPrecision(3); eqPreset = null; }, () => b.q.toFixed(2), Math.log((CUT(b.type) || SHELF(b.type) ? 0.71 : 1) / 0.1) / Math.log(180))),
+        b && CUT(b.type) && h('div', { className: 'ed-modes' }, h('span', { className: 'mono pr-l' }, '[slope]'),
+          SLOPES.map(n => h('button', { className: 'mode' + ((b.slope || 12) === n ? ' on' : ''), onclick: () => { b.slope = n; eqPreset = null; haptic(); live(); renderPanel(); } }, `${n} dB/oct`))),
         h('div', { className: 'ed-modes' }, presetMenu(EQ_PRESETS, bands => { s.eq = bands.map(x => ({ ...x })); s.eqOn = true; eqSel = 0; rebuild(); live(); renderPanel(); }, n => n === eqPreset)),
       ];
     } else if (tab === 'dyn') {

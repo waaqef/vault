@@ -1030,6 +1030,7 @@ dialog.editor.closing { animation: sheet-down .28s var(--ease) forwards !importa
 /* …but not when something inside the same tab is redrawn (picking an EQ band, a filter type) */
 .ed-panel.still > * { animation: none; }
 /* editor: factory presets dropdown, round knobs (EQ and compressor), the compressor curve */
+.ed-modes .pr-l { flex: none; font-size: 11px; color: var(--fg-3); }
 .preset-sel { height: 34px; min-width: 0; max-width: 220px; padding: 0 30px 0 12px; border-radius: 10px; font-size: 13px; }
 .knobs { display: grid; grid-template-columns: repeat(auto-fill, minmax(78px, 1fr)); gap: 12px 6px; flex: none; }
 .knob { display: grid; justify-items: center; gap: 2px; padding: 4px 0; border-radius: 14px; cursor: ns-resize; touch-action: none; user-select: none; -webkit-user-select: none; outline: none; }
@@ -1491,3 +1492,14 @@ button.gs-step:active { transform: scale(.98); }
 .card:hover .card-art, :root.refined .card:hover .card-art, :root.glassy .card:hover .card-art { box-shadow: 0 14px 30px rgba(0,0,0,.4), 0 0 0 1px rgba(255,255,255,.12); }
 .card .card-art { transition: transform .35s var(--ease), box-shadow .6s ease; }
 @media (prefers-reduced-motion: reduce) { .card::before { animation: none; } }
+
+/* editor: the On / Off switch sits in line with the buttons beside it (it was stacked, label above the switch) */
+.ed label.switch { display: inline-flex; align-items: center; gap: 8px; margin: 0; }
+/* editor buttons (band numbers, filter types, Reset, presets …) in the raised, grainy look of the app's refined style */
+:root.glassy .ed .mode { border-radius: 12px; color: var(--fg); box-shadow: var(--raised-edge); background: var(--raised); text-shadow: 0 1px 1px rgba(0,0,0,.35); }
+:root.glassy .ed .mode:hover { background: var(--raised-hover); }
+:root.glassy .ed .mode:disabled { opacity: .35; }
+:root.glassy .ed .mode.on, :root.glassy .ed .mode.on:hover { color: var(--on-accent, #141414); text-shadow: none;
+  background: var(--grain) 0 0 / 140px, linear-gradient(180deg, color-mix(in srgb, var(--hi), #fff 22%), var(--hi));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.4), inset 0 -1px 0 rgba(0,0,0,.18), 0 4px 14px color-mix(in srgb, var(--hi) 35%, transparent); }
+:root.glassy .ed .preset-sel { border-radius: 12px; border: 0; color: var(--fg); box-shadow: var(--raised-edge); background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='white' stroke-opacity='.5' stroke-width='2.4' stroke-linecap='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E") right 12px center / 12px no-repeat, var(--raised); }
