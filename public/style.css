@@ -723,6 +723,8 @@ body.bulk-open #main { padding-bottom: 120px; }
 .toast { pointer-events: auto; }
 .toast.has-action { display: flex; align-items: center; gap: 12px; }
 .toast.has-action > span { flex: 1; }
+.toast-x { flex: none; display: grid; place-items: center; width: 24px; height: 24px; margin: -4px -8px -4px 0; border: 0; border-radius: 50%; background: none; color: var(--fg-3); cursor: pointer; }
+.toast-x:hover { background: var(--fill-2); color: var(--fg); }
 .toast-btn { border: 0; background: none; color: var(--user-accent); font-weight: 600; padding: 4px 2px; cursor: pointer; }
 
 /* trash */

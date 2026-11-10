@@ -5,7 +5,7 @@ import { decodeAudio, bpmKeyOf, parseName, trackInfo, readTags, cleanTitle, lead
 import { peaksOf, waveSvg } from './wave.js';
 import { makeZip, safeName } from './zip.js';
 
-const APP_VERSION = '[vault] v3.6.4'; // shown in Settings and sent with bug reports
+const APP_VERSION = '[vault] v3.6.5'; // shown in Settings and sent with bug reports
 // ---- helpers ------------------------------------------------------------------
 const $ = (s, el = document) => el.querySelector(s);
 function h(tag, attrs = {}, ...kids) {
@@ -109,15 +109,25 @@ const plainError = (status, said) => (said && said !== 'Not found' ? said
 // Nothing fails silently: a request that went wrong and wasn't handled where it was made still says so.
 addEventListener('unhandledrejection', e => { if (e.reason?.fromApi) { e.preventDefault(); oops(e.reason); } });
 
-export function toast(msg, { error = false, ms = 3500, action, quiet = false } = {}) {
-  const el = h('div', { className: 'toast' + (error ? ' error' : '') + (action ? ' has-action' : '') + (quiet ? ' quiet' : '') }, h('span', {}, msg),
-    action && h('button', { className: 'toast-btn', onclick: () => { el.remove(); action.run(); } }, action.label));
-  el.remove = () => { el.classList.add('out'); setTimeout(() => Element.prototype.remove.call(el), 200); };
+// A message at the bottom. It goes after 2 seconds (never while the pointer is over it), or with its ×.
+// ms: 0 keeps it up (progress messages, removed by whoever made them). The same message twice shows once.
+export function toast(msg, { error = false, ms = 2000, action, quiet = false } = {}) {
   const box = $('#toasts');
+  const same = typeof msg === 'string' && [...box.children].find(t => t.dataset.msg === msg && !t.classList.contains('out'));
+  if (same) { same.arm?.(); return same; }
+  const el = h('div', { className: 'toast' + (error ? ' error' : '') + (action || ms ? ' has-action' : '') + (quiet ? ' quiet' : '') }, h('span', {}, msg),
+    action && h('button', { className: 'toast-btn', onclick: () => { el.remove(); action.run(); } }, action.label),
+    ms !== 0 && h('button', { className: 'toast-x', 'aria-label': 'Dismiss', onclick: () => el.remove() }, icon('close', 14)));
+  if (typeof msg === 'string') el.dataset.msg = msg;
+  el.remove = () => { clearTimeout(timer); el.classList.add('out'); setTimeout(() => Element.prototype.remove.call(el), 200); };
+  let timer, over = false;
+  el.arm = () => { clearTimeout(timer); if (ms && !over) timer = setTimeout(() => el.remove(), 2000); };
+  el.onpointerenter = () => { over = true; clearTimeout(timer); };
+  el.onpointerleave = () => { over = false; el.arm(); };
   box.append(el);
   // Toasts live in the top layer (a popover), re-raised each time so they sit above any open menu or dialog, not under its blur.
   try { if (box.matches(':popover-open')) box.hidePopover(); box.showPopover(); } catch {}
-  if (ms) setTimeout(() => el.remove(), ms);
+  el.arm();
   return el;
 }
 // Error messages offer to report the problem; the last few are remembered for the report.
@@ -2281,7 +2291,7 @@ async function storageProblem() {
   const text = `${r.code} ${r.message}`.toLowerCase();
   const reset = new Date(); reset.setUTCHours(24, 0, 0, 0);
   lastWhy = /cap|exceed|limit/.test(text)
-    ? `Backblaze's free daily limit is used up, so songs and covers can't load right now. It resets at ${reset.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}.`
+    ? `Backblaze's free daily limit is used up, so songs and covers can't load right now. It resets at ${reset.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).replace(/\.$/, '')}.`
     : /key|access ?denied|signature|unauthori|invalid/.test(text) || r.status === 401 || r.status === 403
       ? 'Backblaze is refusing the app\'s key (it was probably deleted or replaced). On your computer, run node setup.mjs and paste your current Backblaze key.'
       : `Backblaze isn't answering properly (${r.status} ${r.code || ''}). Try again in a bit.`;
