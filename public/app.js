@@ -5,7 +5,7 @@ import { decodeAudio, bpmKeyOf, parseName, trackInfo, readTags, cleanTitle, lead
 import { peaksOf, waveSvg } from './wave.js';
 import { makeZip, safeName } from './zip.js';
 
-const APP_VERSION = '[vault] v3.6.3'; // shown in Settings and sent with bug reports
+const APP_VERSION = '[vault] v3.6.4'; // shown in Settings and sent with bug reports
 // ---- helpers ------------------------------------------------------------------
 const $ = (s, el = document) => el.querySelector(s);
 function h(tag, attrs = {}, ...kids) {
@@ -2392,7 +2392,7 @@ function drawFullPlayer() {
       h('button', { className: 'icon-btn fp-close', 'aria-label': 'Close the player', onclick: () => fp.d.close() }, icon('chevron', 24)),
       h('button', { className: 'fp-from fp-link', title: `Open ${fromName || 'the project'}`, onclick: openFrom }, h('span', { className: 'mono' }, '[now playing]'), h('b', {}, fromName || 'your library')),
       h('button', { className: 'icon-btn', 'aria-label': 'Track options', onclick: () => trackMenu(t, queue) }, icon('more', 22))),
-    h('div', { className: 'fp-art' + (art ? '' : ' disc') + (playing ? ' playing' : ''), style: bg(art) }),
+    h('div', { className: 'fp-art' + (art ? '' : ' disc') + (playing ? ' playing' : ''), style: bg(art), ...artPress }),
     h('div', { className: 'fp-info' },
       h('div', { className: 'fp-titles' }, title, h('div', { className: 'fp-a' }, [t.artist, t.musical_key, t.bpm && Math.round(t.bpm) + ' bpm'].filter(Boolean).join(' · ') || '\u00a0')),
       canEdit(t.project_id) && [starBtn(t), throwBtn(t)]),
@@ -3582,6 +3582,45 @@ async function storageDialog() {
 document.addEventListener('gesturestart', e => e.preventDefault());
 document.addEventListener('touchmove', e => { if (e.touches.length > 1) e.preventDefault(); }, { passive: false });
 
+// Touching the cover in the full-screen player: it tips toward your finger and sinks in, a light follows the finger,
+// and letting go springs it back with a ripple from where you touched.
+const artPress = (() => {
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)');
+  const at = (el, e) => { const r = el.getBoundingClientRect(); return { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height, r }; };
+  const tilt = (x, y, deg) => `${(0.5 - y).toFixed(3)} ${(x - 0.5).toFixed(3)} 0 ${deg}deg`;
+  let down = null;
+  const release = function (e) {
+    if (!down) return;
+    const { x, y } = down; down = null;
+    this.classList.remove('pressing');
+    this.getAnimations().forEach(a => a.id === 'press' && a.cancel()); // the release spring takes over from the pressed pose
+    if (reduce.matches) return;
+    this.animate([{ scale: '.94', rotate: tilt(x, y, 9) }, { scale: '1.035', rotate: tilt(x, y, -3), offset: 0.45 }, { scale: '.995', rotate: tilt(x, y, 1), offset: 0.75 }, { scale: '1', rotate: tilt(x, y, 0) }],
+      { duration: 620, easing: 'cubic-bezier(.2,.8,.2,1)' });
+    if (e.type !== 'pointerup') return;
+    const r = this.getBoundingClientRect(), size = Math.hypot(r.width, r.height) * 2;
+    const ring = h('span', { className: 'fp-ripple', style: { left: `${x * 100}%`, top: `${y * 100}%`, width: `${size}px`, height: `${size}px` } });
+    this.append(ring);
+    ring.addEventListener('animationend', () => ring.remove());
+  };
+  return {
+    onpointerdown(e) {
+      const { x, y } = at(this, e);
+      down = { x, y };
+      this.style.setProperty('--mx', `${x * 100}%`); this.style.setProperty('--my', `${y * 100}%`);
+      this.classList.add('pressing');
+      haptic();
+      if (!reduce.matches) this.animate([{ scale: '1', rotate: tilt(x, y, 0) }, { scale: '.94', rotate: tilt(x, y, 9) }], { duration: 160, easing: 'cubic-bezier(.3,.7,.4,1)', fill: 'forwards', id: 'press' });
+    },
+    onpointermove(e) {
+      if (!down) return;
+      const { x, y } = at(this, e);
+      down = { x, y };
+      this.style.setProperty('--mx', `${x * 100}%`); this.style.setProperty('--my', `${y * 100}%`);
+    },
+    onpointerup: release, onpointercancel: release, onpointerleave: release,
+  };
+})();
 // ---- swipe gestures (touch) ----
 // Haptic tick: vibrate() on Android; on iPhone (Safari 18+) tapping a hidden "switch" gives a light tap.
 // Haptic tap. Android: vibrate(). iPhone (iOS 18+): Safari taps when a "switch" checkbox flips, so a hidden one is made
