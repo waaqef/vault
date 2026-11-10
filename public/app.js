@@ -5,7 +5,7 @@ import { decodeAudio, bpmKeyOf, parseName, trackInfo, readTags, cleanTitle, lead
 import { peaksOf, waveSvg } from './wave.js';
 import { makeZip, safeName } from './zip.js';
 
-const APP_VERSION = '[vault] v3.5'; // shown in Settings and sent with bug reports
+const APP_VERSION = '[vault] v3.5.1'; // shown in Settings and sent with bug reports
 // ---- helpers ------------------------------------------------------------------
 const $ = (s, el = document) => el.querySelector(s);
 function h(tag, attrs = {}, ...kids) {
@@ -2734,6 +2734,9 @@ async function settingsDialog(only) {
         } }, 'Change')),
       S.me?.storage === 'drive' && row('Google Drive', S.me.driveEmail || (S.me.driveConnected ? 'Connected' : 'Not connected'),
         h('a', { className: 'btn', href: '/api/drive/connect' }, S.me.driveConnected ? 'Reconnect' : 'Connect')),
+      // The admin starts on Backblaze; connecting Drive sends new uploads there (files already on Backblaze keep playing from it).
+      S.me && S.me.storage !== 'drive' && row('Google Drive', 'Store new uploads in your Google Drive instead of Backblaze. Files already uploaded stay where they are and keep working.',
+        h('a', { className: 'btn', href: '/api/drive/connect' }, 'Connect')),
       S.me?.isAdmin && row('Analytics', 'Sign-ups, activity, plays and storage', h('button', { className: 'btn', onclick: () => { d.close(); analyticsDialog(); } }, 'Open')),
       S.me?.isAdmin && row('People', 'Everyone with an account', h('button', { className: 'btn', onclick: () => { d.close(); peopleDialog(); } }, 'Manage')),
       row('Password', 'Changing it logs out your other devices', h('button', { className: 'btn', onclick: () => { d.close(); passwordDialog(); } }, 'Change')),
