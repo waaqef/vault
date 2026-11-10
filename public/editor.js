@@ -604,6 +604,74 @@ export async function openEditor(track, app) {
     painters.push(paint); paint();
     return row;
   }
+  // A round knob, like a plugin's (used by the EQ and the compressor): drag up / down (or sideways) to turn it, Shift
+  // for fine moves, scroll or the arrow keys; double-tap or double-click resets it. bipolar: the ring fills from the
+  // middle (for gains that can go either way).
+  function knob(label, min, max, step, get, set, show, reset, bipolar = false, notch = (max - min) / 40) {
+    const NS = 'http://www.w3.org/2000/svg', A0 = -135, SWEEP = 270, C = 32, R = 26;
+    // the knob face: a soft lit-from-above gradient, defined once for the page
+    if (!document.getElementById('knob-cap')) document.body.insertAdjacentHTML('beforeend', '<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs><radialGradient id="knob-cap" cx=".38" cy=".28" r=".95"><stop offset="0" stop-color="#565656"/><stop offset=".55" stop-color="#2c2c2c"/><stop offset="1" stop-color="#1a1a1a"/></radialGradient></defs></svg>');
+    const sv = (tag, at) => { const e = document.createElementNS(NS, tag); for (const k in at) e.setAttribute(k, at[k]); return e; };
+    const pt = a => { const r = ((a - 90) * Math.PI) / 180; return [C + R * Math.cos(r), C + R * Math.sin(r)]; };
+    const arc = (a, b) => { if (b < a) [a, b] = [b, a]; const [x0, y0] = pt(a), [x1, y1] = pt(b); return `M${x0.toFixed(2)} ${y0.toFixed(2)}A${R} ${R} 0 ${b - a > 180 ? 1 : 0} 1 ${x1.toFixed(2)} ${y1.toFixed(2)}`; };
+    const svg = sv('svg', { viewBox: '0 0 64 64', 'aria-hidden': 'true' });
+    const ring = sv('path', { d: arc(A0, A0 + SWEEP), class: 'k-track' }), lit = sv('path', { class: 'k-fill' });
+    const ptr = sv('g', {}); ptr.append(sv('line', { x1: C, y1: C - 8, x2: C, y2: C - 17, class: 'k-tick' }));
+    svg.append(ring, lit, sv('circle', { cx: C, cy: C, r: 19, class: 'k-cap' }), ptr);
+    const val = h('span', { className: 'k-val num' });
+    const el = h('div', { className: 'knob', role: 'slider', tabIndex: 0, 'aria-label': label, 'aria-valuemin': min, 'aria-valuemax': max }, svg, h('span', { className: 'k-label' }, label), val);
+    const ang = v => A0 + SWEEP * Math.max(0, Math.min(1, (v - min) / (max - min)));
+    const paint = () => {
+      const v = get(), a = ang(v), from = bipolar ? ang(reset) : A0;
+      lit.setAttribute('d', Math.abs(a - from) < 0.5 ? '' : arc(from, a));
+      ptr.setAttribute('transform', `rotate(${a.toFixed(2)} ${C} ${C})`);
+      val.textContent = show(v); el.setAttribute('aria-valuenow', v); el.setAttribute('aria-valuetext', show(v));
+    };
+    const setV = v => {
+      v = +(Math.round(Math.max(min, Math.min(max, v)) / step) * step).toFixed(4);
+      const was = get();
+      if (v === was) return;
+      if (Math.floor(v / notch + 1e-6) !== Math.floor(was / notch + 1e-6) || (v - reset) * (was - reset) <= 0) haptic(true);
+      set(v); painters.forEach(p => p()); live();
+    };
+    // a full turn is about 220 px of dragging (slower with Shift); it carries on smoothly if Shift is pressed mid-drag
+    let drag = null, lastTap = 0;
+    const rate = e => (e.shiftKey ? 0.25 : 1) * (max - min) / 220;
+    el.addEventListener('pointerdown', e => { e.preventDefault(); try { el.setPointerCapture(e.pointerId); } catch {} drag = { x: e.clientX, y: e.clientY, v: get(), k: rate(e), moved: false }; el.classList.add('active'); });
+    el.addEventListener('pointermove', e => {
+      if (!drag) return;
+      const k = rate(e);
+      if (k !== drag.k) Object.assign(drag, { x: e.clientX, y: e.clientY, v: get(), k });
+      const dx = e.clientX - drag.x, dy = drag.y - e.clientY;
+      if (!drag.moved && Math.hypot(dx, dy) < 4) return;
+      drag.moved = true;
+      setV(drag.v + (dy + dx * 0.6) * k);
+    });
+    el.addEventListener('pointerup', () => {
+      if (!drag) return;
+      const tapped = !drag.moved;
+      if (drag.moved && !vib) haptic();
+      drag = null; el.classList.remove('active');
+      if (!tapped) return;
+      if (performance.now() - lastTap < 350) { lastTap = 0; setV(reset); if (!vib) haptic(); el.classList.remove('reset'); void el.offsetWidth; el.classList.add('reset'); }
+      else lastTap = performance.now();
+    });
+    el.addEventListener('pointercancel', () => { drag = null; el.classList.remove('active'); });
+    let acc = 0;
+    el.addEventListener('wheel', e => {
+      e.preventDefault();
+      acc += -Math.sign(e.deltaY || -e.deltaX) * (max - min) / (e.shiftKey ? 200 : 60);
+      const whole = Math.trunc(acc / step) * step;
+      if (whole) { acc -= whole; setV(get() + whole); }
+    }, { passive: false });
+    el.addEventListener('keydown', e => {
+      const k = { ArrowRight: 1, ArrowUp: 1, ArrowLeft: -1, ArrowDown: -1 }[e.key];
+      if (k) { e.preventDefault(); setV(get() + k * step * (e.shiftKey ? 10 : 1)); }
+      if (e.key === 'Home' || e.key === 'Backspace') { e.preventDefault(); setV(reset); }
+    });
+    painters.push(paint); paint();
+    return el;
+  }
   // Segmented control for switching modes, with an optional control on the right.
   const modes = (current, list, onPick, right) => h('div', { className: 'ed-modes' },
     h('div', { className: 'seg', role: 'radiogroup' }, list.map(([id, label, cls = '']) =>
@@ -727,14 +795,16 @@ export async function openEditor(track, app) {
     live(); painters.forEach(p => p());
   }, { passive: false });
 
-  // ---- factory presets: a scrolling row of chips ----
+  // ---- factory presets: a dropdown (it shows the one in use until you change something) ----
   let eqPreset = null, compPreset = null;
-  function presetRow(list, apply, isOn) {
-    return h('div', { className: 'ed-modes scroll presets' }, h('span', { className: 'mono pr-l' }, '[presets]'),
-      list.map(([name, value]) => h('button', { className: 'mode' + (isOn(name) ? ' on' : ''), onclick() {
-        if (list === EQ_PRESETS) eqPreset = name; else compPreset = name;
-        apply(value); haptic(); toast(`${name}`, { ms: 1200, quiet: true });
-      } }, name)));
+  function presetMenu(list, apply, isOn) {
+    const cur = list.find(([n]) => isOn(n));
+    return h('select', { className: 'preset-sel', 'aria-label': 'Factory presets', onchange() {
+      const item = list.find(([n]) => n === this.value);
+      if (!item) return;
+      if (list === EQ_PRESETS) eqPreset = item[0]; else compPreset = item[0];
+      apply(item[1]); haptic();
+    } }, h('option', { value: '', disabled: true, selected: !cur }, 'Factory presets'), list.map(([n]) => h('option', { value: n, selected: cur?.[0] === n }, n)));
   }
 
   // ---- compressor curve: what comes out for what goes in ----
@@ -822,15 +892,16 @@ export async function openEditor(track, app) {
           h('span', { className: 'grow' }),
           h('button', { className: 'mode', title: 'Every band back to flat', onclick: resetEq }, 'Reset EQ'),
           power(s.eqOn, () => { s.eqOn = !s.eqOn; })),
-        presetRow(EQ_PRESETS, bands => { s.eq = bands.map(x => ({ ...x })); s.eqOn = true; eqSel = 0; rebuild(); live(); renderPanel(); }, n => n === eqPreset),
         eqCanvas,
         b && h('div', { className: 'ed-modes scroll' },
           Object.entries(TYPES).map(([v, l]) => h('button', { className: 'mode' + (b.type === v ? ' on' : ''), onclick: () => { if (CUT(v) !== CUT(b.type)) b.q = CUT(v) ? 0.71 : 1; b.type = v; live(); renderPanel(); } }, l)),
           h('button', { className: 'mode', title: 'This band back to flat (or double-tap its dot)', onclick: () => resetBand(eqSel) }, 'Reset band'),
           s.eq.length > 1 && h('button', { className: 'mode', 'aria-label': `Remove band ${eqSel + 1}`, onclick: () => { s.eq.splice(eqSel, 1); eqSel = Math.max(0, eqSel - 1); rebuild(); renderPanel(); } }, icon('trash', 14))),
-        b && ruler('Freq', 0, 1, 0.001, () => Math.log(b.freq / 20) / Math.log(1000), v => { b.freq = Math.round(20 * Math.pow(1000, v)); }, () => fmtHz(b.freq), Math.log(1000 / 20) / Math.log(1000), 420),
-        b && HAS_GAIN(b.type) && ruler('Gain', -DBR, DBR, 0.1, () => b.gain, v => { b.gain = v; }, dbs, 0, 360),
-        b && !SHELF(b.type) && ruler('Q', 0, 1, 0.001, () => Math.log(b.q / 0.1) / Math.log(180), v => { b.q = +(0.1 * Math.pow(180, v)).toPrecision(3); }, () => b.q.toFixed(2), Math.log((CUT(b.type) ? 0.71 : 1) / 0.1) / Math.log(180), 420),
+        b && h('div', { className: 'knobs' },
+          knob('Freq', 0, 1, 0.001, () => Math.log(b.freq / 20) / Math.log(1000), v => { b.freq = Math.round(20 * Math.pow(1000, v)); eqPreset = null; }, () => fmtHz(b.freq), Math.log(1000 / 20) / Math.log(1000)),
+          HAS_GAIN(b.type) && knob('Gain', -DBR, DBR, 0.1, () => b.gain, v => { b.gain = v; eqPreset = null; }, dbs, 0, true),
+          !SHELF(b.type) && knob('Q', 0, 1, 0.001, () => Math.log(b.q / 0.1) / Math.log(180), v => { b.q = +(0.1 * Math.pow(180, v)).toPrecision(3); eqPreset = null; }, () => b.q.toFixed(2), Math.log((CUT(b.type) ? 0.71 : 1) / 0.1) / Math.log(180))),
+        h('div', { className: 'ed-modes' }, presetMenu(EQ_PRESETS, bands => { s.eq = bands.map(x => ({ ...x })); s.eqOn = true; eqSel = 0; rebuild(); live(); renderPanel(); }, n => n === eqPreset)),
       ];
     } else if (tab === 'dyn') {
       grText = h('span', { className: 'num' }, '0.0'); pkText = h('span', { className: 'num' }, '–∞');
@@ -838,21 +909,22 @@ export async function openEditor(track, app) {
       const cp = s.comp;
       content = dynMode === 'comp' ? [
         modes(dynMode, [['comp', 'Compressor'], ['limit', 'Limiter']], m => { dynMode = m; renderPanel(); }, power(cp.on, () => { cp.on = !cp.on; })),
-        presetRow(COMP_PRESETS, x => { Object.assign(cp, { makeup: 0 }, x, { on: true }); rebuild(); live(); renderPanel(); }, n => n === compPreset),
         compCanvas,
         meter('[gr]', grBar, grText),
+        // ratio, attack and release turn on a log scale (like real compressors), so the useful small values get room
+        h('div', { className: 'knobs' },
+          knob('Thresh', -60, 0, 0.5, () => cp.threshold, v => { cp.threshold = v; compPreset = null; }, dbs, -24),
+          knob('Ratio', 0, 1, 0.001, () => Math.log(cp.ratio) / Math.log(20), v => { cp.ratio = +Math.pow(20, v).toFixed(1); compPreset = null; }, () => cp.ratio.toFixed(1) + ':1', Math.log(4) / Math.log(20)),
+          knob('Attack', 0, 1, 0.001, () => Math.log(cp.attack / 0.1) / Math.log(2000), v => { cp.attack = +(0.1 * Math.pow(2000, v)).toPrecision(2); compPreset = null; }, () => (cp.attack < 10 ? cp.attack.toFixed(1) : Math.round(cp.attack)) + ' ms', Math.log(100) / Math.log(2000)),
+          knob('Release', 0, 1, 0.001, () => Math.log(cp.release / 10) / Math.log(100), v => { cp.release = Math.round(10 * Math.pow(100, v)); compPreset = null; }, () => cp.release + ' ms', Math.log(25) / Math.log(100)),
+          knob('Mix', 0, 1, 0.01, () => cp.mix, v => { cp.mix = v; compPreset = null; }, v => Math.round(v * 100) + '%', 1),
+          knob('Makeup', 0, 24, 0.1, () => cp.makeup, v => { cp.makeup = v; }, dbs, 0),
+          knob('Knee', 0, 40, 0.5, () => cp.knee, v => { cp.knee = v; compPreset = null; }, dbs, 6),
+          knob('Input', -24, 24, 0.1, () => s.inGain, v => { s.inGain = v; }, dbs, 0, true)),
         h('div', { className: 'ed-modes' },
-          h('span', { className: 'note', style: { fontSize: '12px' } }, 'The level is evened out for you; Makeup adds more.'),
+          presetMenu(COMP_PRESETS, x => { Object.assign(cp, { makeup: 0 }, x, { on: true }); rebuild(); live(); renderPanel(); }, n => n === compPreset),
           h('span', { className: 'grow' }),
           h('button', { className: 'mode', title: 'The compressor back to how it started', onclick: () => { Object.assign(cp, { ...defaults().comp, on: cp.on }); compPreset = null; haptic(); rebuild(); live(); renderPanel(); } }, 'Reset')),
-        ruler('Thresh', -60, 0, 0.5, () => cp.threshold, v => { cp.threshold = v; compPreset = null; }, dbs, -24),
-        ruler('Ratio', 1, 20, 0.1, () => cp.ratio, v => { cp.ratio = v; compPreset = null; }, v => v.toFixed(1) + ':1', 4),
-        ruler('Attack', 0, 200, 0.5, () => cp.attack, v => { cp.attack = v; compPreset = null; }, v => v.toFixed(1) + ' ms', 10),
-        ruler('Release', 10, 1000, 1, () => cp.release, v => { cp.release = v; compPreset = null; }, v => Math.round(v) + ' ms', 250),
-        ruler('Mix', 0, 1, 0.01, () => cp.mix, v => { cp.mix = v; compPreset = null; }, v => (v >= 0.995 ? '100% wet' : Math.round(v * 100) + '% wet'), 1),
-        ruler('Makeup', 0, 24, 0.1, () => cp.makeup, v => { cp.makeup = v; }, dbs, 0),
-        ruler('Knee', 0, 40, 0.5, () => cp.knee, v => { cp.knee = v; compPreset = null; }, dbs, 6),
-        ruler('Input', -24, 24, 0.1, () => s.inGain, v => { s.inGain = v; }, dbs, 0, 360),
       ] : [
         modes(dynMode, [['comp', 'Compressor'], ['limit', 'Limiter']], m => { dynMode = m; renderPanel(); }, power(s.limit.on, () => { s.limit.on = !s.limit.on; })),
         ruler('Ceiling', -12, 0, 0.1, () => s.limit.ceiling, v => { s.limit.ceiling = v; }, dbs, -1),
