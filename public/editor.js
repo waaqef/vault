@@ -14,6 +14,25 @@ const TYPES = { peaking: 'Bell', lowshelf: 'Low shelf', highshelf: 'High shelf',
 const HAS_GAIN = t => ['peaking', 'lowshelf', 'highshelf'].includes(t);
 const SHELF = t => t === 'lowshelf' || t === 'highshelf'; // Web Audio shelves have no Q
 const CUT = t => t === 'highpass' || t === 'lowpass';
+// Factory presets. EQ ones replace the bands; compressor ones set the compressor (and switch it on).
+const EQ_PRESETS = [
+  ['Clean up', [{ type: 'highpass', freq: 35, gain: 0, q: 0.71 }, { type: 'peaking', freq: 300, gain: -2.5, q: 1 }, { type: 'highshelf', freq: 10000, gain: 1, q: 0.7 }]],
+  ['Vocal clarity', [{ type: 'highpass', freq: 90, gain: 0, q: 0.71 }, { type: 'peaking', freq: 250, gain: -3, q: 1.2 }, { type: 'peaking', freq: 3000, gain: 3, q: 1 }, { type: 'highshelf', freq: 10000, gain: 2.5, q: 0.7 }]],
+  ['Warm', [{ type: 'lowshelf', freq: 120, gain: 3, q: 0.7 }, { type: 'peaking', freq: 3500, gain: -1.5, q: 1 }, { type: 'highshelf', freq: 9000, gain: -2, q: 0.7 }]],
+  ['Bass boost', [{ type: 'lowshelf', freq: 90, gain: 5, q: 0.7 }, { type: 'peaking', freq: 300, gain: -2, q: 1.2 }]],
+  ['Air', [{ type: 'peaking', freq: 5000, gain: 1, q: 0.8 }, { type: 'highshelf', freq: 12000, gain: 4, q: 0.7 }]],
+  ['De-mud', [{ type: 'peaking', freq: 400, gain: -4, q: 1.5 }]],
+  ['Kick punch', [{ type: 'highpass', freq: 30, gain: 0, q: 0.71 }, { type: 'peaking', freq: 60, gain: 3, q: 1.2 }, { type: 'peaking', freq: 350, gain: -4, q: 1.5 }, { type: 'peaking', freq: 4000, gain: 3, q: 1.5 }]],
+  ['Lo-fi phone', [{ type: 'highpass', freq: 400, gain: 0, q: 0.71 }, { type: 'peaking', freq: 1500, gain: 4, q: 1 }, { type: 'lowpass', freq: 3200, gain: 0, q: 0.71 }]],
+];
+const COMP_PRESETS = [
+  ['Gentle glue', { threshold: -18, ratio: 2, knee: 10, attack: 30, release: 200, mix: 1 }],
+  ['Vocal', { threshold: -22, ratio: 3.5, knee: 6, attack: 8, release: 120, mix: 1 }],
+  ['Drum punch', { threshold: -16, ratio: 4, knee: 4, attack: 25, release: 90, mix: 1 }],
+  ['Bass control', { threshold: -20, ratio: 4, knee: 6, attack: 15, release: 150, mix: 1 }],
+  ['Parallel smash', { threshold: -38, ratio: 12, knee: 2, attack: 1, release: 80, mix: 0.35 }],
+  ['Master bus', { threshold: -10, ratio: 1.8, knee: 12, attack: 30, release: 250, mix: 1 }],
+];
 const fmt = s => `${Math.floor(s / 60)}:${(s % 60).toFixed(1).padStart(4, '0')}`;
 
 const defaults = () => ({
@@ -26,20 +45,37 @@ const defaults = () => ({
     { type: 'peaking', freq: 2500, gain: 0, q: 1 },
     { type: 'highshelf', freq: 8000, gain: 0, q: 0.7 },
   ],
-  comp: { on: false, threshold: -24, ratio: 4, knee: 6, attack: 10, release: 250, makeup: 0 },
+  comp: { on: false, threshold: -24, ratio: 4, knee: 6, attack: 10, release: 250, makeup: 0, mix: 1 },
   limit: { on: false, ceiling: -1 },
 });
 
 // The processing chain. Built the same way for live preview and for the final render, so they match.
+// The compressor runs in parallel with the dry sound, blended by Mix. Browsers' compressors delay the sound by 6 ms
+// (they look ahead), so the dry side is delayed by the same, or blending the two would sound hollow (comb filtering).
+const COMP_DELAY = 0.006;
+// Browsers' compressors already turn the result back up by themselves (built-in makeup gain: 0.6 of what the curve takes
+// off at full scale), so the level stays about even. Makeup here is extra on top of that, 0 by default.
+function setMix(c, comp) { c.wet.gain.value = comp.mix; c.dry.gain.value = 1 - comp.mix; c.makeup.gain.value = db(comp.makeup); }
 function makeChain(ctx, s) {
   const gain = v => { const g = ctx.createGain(); g.gain.value = db(v); return g; };
   const c = { inG: gain(s.inGain), eq: [], comp: null, makeup: null, lim: null, pan: ctx.createStereoPanner(), outG: gain(s.outGain) };
   c.pan.pan.value = s.pan;
   if (s.eqOn) c.eq = s.eq.map(b => setBand(ctx.createBiquadFilter(), b));
-  if (s.comp.on) { c.comp = setComp(ctx.createDynamicsCompressor(), s.comp); c.makeup = gain(s.comp.makeup); }
   if (s.limit.on) c.lim = setLimit(ctx.createDynamicsCompressor(), s.limit);
-  const nodes = [c.inG, ...c.eq, c.comp, c.makeup, c.lim, c.pan, c.outG].filter(Boolean);
-  nodes.slice(1).forEach((n, i) => nodes[i].connect(n));
+  const chain = nodes => { nodes = nodes.filter(Boolean); nodes.slice(1).forEach((n, i) => nodes[i].connect(n)); return nodes[nodes.length - 1]; };
+  let last = chain([c.inG, ...c.eq]);
+  if (s.comp.on) {
+    c.comp = setComp(ctx.createDynamicsCompressor(), s.comp);
+    c.makeup = ctx.createGain(); c.wet = ctx.createGain(); c.dry = ctx.createGain(); c.sum = ctx.createGain();
+    c.delay = ctx.createDelay(0.05); c.delay.delayTime.value = COMP_DELAY;
+    c.pre = ctx.createAnalyser(); c.pre.fftSize = 2048; // the level going in (the dot on the curve)
+    setMix(c, s.comp);
+    last.connect(c.comp); last.connect(c.delay); last.connect(c.pre);
+    c.comp.connect(c.makeup).connect(c.wet).connect(c.sum);
+    c.delay.connect(c.dry).connect(c.sum);
+    last = c.sum;
+  }
+  chain([last, c.lim, c.pan, c.outG]);
   c.input = c.inG; c.output = c.outG;
   return c;
 }
@@ -309,7 +345,7 @@ export async function openEditor(track, app) {
     if (ab) toggleAB(false);
     chain.inG.gain.value = db(s.inGain); chain.outG.gain.value = db(s.outGain); chain.pan.pan.value = s.pan;
     chain.eq.forEach((f, i) => setBand(f, s.eq[i]));
-    if (chain.comp) { setComp(chain.comp, s.comp); chain.makeup.gain.value = db(s.comp.makeup); }
+    if (chain.comp) { setComp(chain.comp, s.comp); setMix(chain, s.comp); }
     if (chain.lim) setLimit(chain.lim, s.limit);
     if (src && !ab && src.playbackRate.value !== s.varispeed) { offset = pos(); startAt = actx.currentTime; src.playbackRate.value = s.varispeed; }
     if (shifter) { shifter.rate = s.varispeed; shifter.tempo = s.tempo; shifter.pitchSemitones = s.pitch; }
@@ -639,7 +675,7 @@ export async function openEditor(track, app) {
     }
   }
   // EQ resets: the whole EQ back to flat, or one band back to how it started (the four starting bands, or a plain bell).
-  function resetEq() { s.eq = defaults().eq; s.eqOn = true; eqSel = 0; haptic(); rebuild(); live(); renderPanel(); toast('EQ back to flat', { ms: 1500 }); }
+  function resetEq() { s.eq = defaults().eq; s.eqOn = true; eqSel = 0; eqPreset = null; haptic(); rebuild(); live(); renderPanel(); toast('EQ back to flat', { ms: 1500 }); }
   function resetBand(i) { if (!s.eq[i]) return; Object.assign(s.eq[i], defaults().eq[i] || { type: 'peaking', freq: 1000, gain: 0, q: 1 }); haptic(); live(); renderPanel(); }
   let lastDot = { i: -1, t: 0 }, drag = null;
   const eqPoint = e => { const r = eqCanvas.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top, r.width, r.height]; };
@@ -677,7 +713,7 @@ export async function openEditor(track, app) {
       if ((g === 0) !== (b.gain === 0)) haptic(true);
       b.gain = g;
     }
-    live(); painters.forEach(p => p());
+    eqPreset = null; live(); painters.forEach(p => p());
   });
   const endDrag = () => { grab = -1; drag = null; };
   eqCanvas.addEventListener('pointerup', endDrag); eqCanvas.addEventListener('pointercancel', endDrag);
@@ -690,6 +726,67 @@ export async function openEditor(track, app) {
     if (eqSel !== i) { eqSel = i; renderPanel(); }
     live(); painters.forEach(p => p());
   }, { passive: false });
+
+  // ---- factory presets: a scrolling row of chips ----
+  let eqPreset = null, compPreset = null;
+  function presetRow(list, apply, isOn) {
+    return h('div', { className: 'ed-modes scroll presets' }, h('span', { className: 'mono pr-l' }, '[presets]'),
+      list.map(([name, value]) => h('button', { className: 'mode' + (isOn(name) ? ' on' : ''), onclick() {
+        if (list === EQ_PRESETS) eqPreset = name; else compPreset = name;
+        apply(value); haptic(); toast(`${name}`, { ms: 1200, quiet: true });
+      } }, name)));
+  }
+
+  // ---- compressor curve: what comes out for what goes in ----
+  // Flat (1:1) up to the threshold, then flatter by the ratio, with the knee rounding the corner. While it plays, a dot
+  // shows the level going in and where it lands. Drag sideways for the threshold, up and down for the ratio.
+  const compCanvas = h('canvas', { className: 'eq-canvas comp-canvas', 'aria-label': 'Compressor curve. Drag sideways for the threshold, up and down for the ratio.' });
+  const DMIN = -60, curveOut = (x, c) => {
+    const T = c.threshold, R = c.ratio, W = c.knee;
+    if (2 * (x - T) < -W) return x;
+    if (2 * (x - T) > W) return T + (x - T) / R;
+    return x + ((1 / R - 1) * (x - T + W / 2) ** 2) / (2 * W);
+  };
+  let inLevel = -Infinity;
+  function drawComp() {
+    if (!compCanvas.isConnected) return;
+    const [g, W, H, dpr] = fit(compCanvas), c = s.comp, X = d => ((d - DMIN) / -DMIN) * W, Y = d => H - ((d - DMIN) / -DMIN) * H;
+    g.clearRect(0, 0, W, H);
+    g.strokeStyle = 'rgba(255,255,255,.06)'; g.lineWidth = 1; g.fillStyle = 'rgba(255,255,255,.3)'; g.font = `${10 * dpr}px "Plex Mono", monospace`;
+    for (const d of [-48, -36, -24, -12]) { g.beginPath(); g.moveTo(X(d), 0); g.lineTo(X(d), H); g.moveTo(0, Y(d)); g.lineTo(W, Y(d)); g.stroke(); g.fillText(d, X(d) + 4 * dpr, H - 6 * dpr); }
+    g.setLineDash([3 * dpr, 4 * dpr]); g.strokeStyle = 'rgba(255,255,255,.18)'; g.beginPath(); g.moveTo(0, H); g.lineTo(W, 0); g.stroke(); g.setLineDash([]); // 1:1
+    // the threshold
+    g.fillStyle = 'rgba(255,255,255,.04)'; g.fillRect(X(c.threshold), 0, W - X(c.threshold), H);
+    g.strokeStyle = c.on ? HI : 'rgba(255,255,255,.3)'; g.globalAlpha = 0.5; g.beginPath(); g.moveTo(X(c.threshold), 0); g.lineTo(X(c.threshold), H); g.stroke(); g.globalAlpha = 1;
+    // the curve (with the mix: wet and dry blended)
+    const builtIn = -0.6 * curveOut(0, c); // the browser's own makeup (see setMix)
+    const out = x => { const wet = curveOut(x, c) + builtIn + c.makeup; return 20 * Math.log10(c.mix * db(wet) + (1 - c.mix) * db(x)); };
+    g.beginPath();
+    for (let i = 0; i <= 120; i++) { const x = DMIN + (i / 120) * -DMIN, y = out(x); i ? g.lineTo(X(x), Y(y)) : g.moveTo(X(x), Y(y)); }
+    g.strokeStyle = c.on ? '#fff' : 'rgba(255,255,255,.3)'; g.lineWidth = 1.75 * dpr; g.stroke();
+    // the knee point you drag
+    g.fillStyle = c.on ? HI : 'rgba(255,255,255,.4)'; g.beginPath(); g.arc(X(c.threshold), Y(out(c.threshold)), 7 * dpr, 0, 7); g.fill();
+    // live level
+    if (playing && c.on && isFinite(inLevel) && inLevel > DMIN) {
+      const x = Math.min(0, inLevel); g.fillStyle = '#fff'; g.beginPath(); g.arc(X(x), Y(out(x)), 4.5 * dpr, 0, 7); g.fill();
+    }
+    g.fillStyle = 'rgba(255,255,255,.7)'; g.font = `${11 * dpr}px "Plex Mono", monospace`;
+    g.fillText(`${c.threshold.toFixed(1)} dB  ·  ${c.ratio.toFixed(1)}:1  ·  ${c.mix >= 0.995 ? '100' : Math.round(c.mix * 100)}% wet  ·  makeup +${(builtIn + c.makeup).toFixed(1)} dB`, 8 * dpr, 16 * dpr);
+  }
+  let cdrag = null;
+  compCanvas.addEventListener('pointerdown', e => { compCanvas.setPointerCapture(e.pointerId); cdrag = { x: e.clientX, y: e.clientY, t: s.comp.threshold, r: s.comp.ratio }; e.preventDefault(); });
+  compCanvas.addEventListener('pointermove', e => {
+    if (!cdrag) return;
+    const r = compCanvas.getBoundingClientRect(), k = touch ? 0.6 : e.shiftKey ? 0.25 : 1;
+    if (!s.comp.on) { s.comp.on = true; rebuild(); } // touching the curve switches it on
+    s.comp.threshold = Math.round(Math.max(-60, Math.min(0, cdrag.t + ((e.clientX - cdrag.x) * k * 60) / r.width)) * 2) / 2;
+    s.comp.ratio = +Math.max(1, Math.min(20, cdrag.r * Math.exp(((e.clientY - cdrag.y) * k) / 60))).toFixed(1);
+    compPreset = null; live(); painters.forEach(p => p());
+  });
+  const endC = () => { if (cdrag) renderPanel(); cdrag = null; };
+  compCanvas.addEventListener('pointerup', endC); compCanvas.addEventListener('pointercancel', endC);
+  compCanvas.addEventListener('dblclick', () => { Object.assign(s.comp, { threshold: -24, ratio: 4 }); live(); renderPanel(); });
+  const preBuf = new Float32Array(2048);
 
   // ---- panels (one per tab) ----------------------------------------------------------
   let grBar = null, pkBar = null, grText = null, pkText = null, shownPanel = '';
@@ -725,6 +822,7 @@ export async function openEditor(track, app) {
           h('span', { className: 'grow' }),
           h('button', { className: 'mode', title: 'Every band back to flat', onclick: resetEq }, 'Reset EQ'),
           power(s.eqOn, () => { s.eqOn = !s.eqOn; })),
+        presetRow(EQ_PRESETS, bands => { s.eq = bands.map(x => ({ ...x })); s.eqOn = true; eqSel = 0; rebuild(); live(); renderPanel(); }, n => n === eqPreset),
         eqCanvas,
         b && h('div', { className: 'ed-modes scroll' },
           Object.entries(TYPES).map(([v, l]) => h('button', { className: 'mode' + (b.type === v ? ' on' : ''), onclick: () => { if (CUT(v) !== CUT(b.type)) b.q = CUT(v) ? 0.71 : 1; b.type = v; live(); renderPanel(); } }, l)),
@@ -737,16 +835,24 @@ export async function openEditor(track, app) {
     } else if (tab === 'dyn') {
       grText = h('span', { className: 'num' }, '0.0'); pkText = h('span', { className: 'num' }, '–∞');
       grBar = h('i'); pkBar = h('i');
+      const cp = s.comp;
       content = dynMode === 'comp' ? [
-        modes(dynMode, [['comp', 'Compressor'], ['limit', 'Limiter']], m => { dynMode = m; renderPanel(); }, power(s.comp.on, () => { s.comp.on = !s.comp.on; })),
-        ruler('Input', -24, 24, 0.1, () => s.inGain, v => { s.inGain = v; }, dbs, 0, 360),
-        ruler('Thresh', -60, 0, 0.5, () => s.comp.threshold, v => { s.comp.threshold = v; }, dbs, -24),
-        ruler('Ratio', 1, 20, 0.1, () => s.comp.ratio, v => { s.comp.ratio = v; }, v => v.toFixed(1) + ':1', 4),
-        ruler('Attack', 0, 200, 0.5, () => s.comp.attack, v => { s.comp.attack = v; }, v => v.toFixed(1) + ' ms', 10),
-        ruler('Release', 10, 1000, 1, () => s.comp.release, v => { s.comp.release = v; }, v => Math.round(v) + ' ms', 250),
-        ruler('Knee', 0, 40, 0.5, () => s.comp.knee, v => { s.comp.knee = v; }, dbs, 6),
-        ruler('Makeup', 0, 24, 0.1, () => s.comp.makeup, v => { s.comp.makeup = v; }, dbs, 0),
+        modes(dynMode, [['comp', 'Compressor'], ['limit', 'Limiter']], m => { dynMode = m; renderPanel(); }, power(cp.on, () => { cp.on = !cp.on; })),
+        presetRow(COMP_PRESETS, x => { Object.assign(cp, { makeup: 0 }, x, { on: true }); rebuild(); live(); renderPanel(); }, n => n === compPreset),
+        compCanvas,
         meter('[gr]', grBar, grText),
+        h('div', { className: 'ed-modes' },
+          h('span', { className: 'note', style: { fontSize: '12px' } }, 'The level is evened out for you; Makeup adds more.'),
+          h('span', { className: 'grow' }),
+          h('button', { className: 'mode', title: 'The compressor back to how it started', onclick: () => { Object.assign(cp, { ...defaults().comp, on: cp.on }); compPreset = null; haptic(); rebuild(); live(); renderPanel(); } }, 'Reset')),
+        ruler('Thresh', -60, 0, 0.5, () => cp.threshold, v => { cp.threshold = v; compPreset = null; }, dbs, -24),
+        ruler('Ratio', 1, 20, 0.1, () => cp.ratio, v => { cp.ratio = v; compPreset = null; }, v => v.toFixed(1) + ':1', 4),
+        ruler('Attack', 0, 200, 0.5, () => cp.attack, v => { cp.attack = v; compPreset = null; }, v => v.toFixed(1) + ' ms', 10),
+        ruler('Release', 10, 1000, 1, () => cp.release, v => { cp.release = v; compPreset = null; }, v => Math.round(v) + ' ms', 250),
+        ruler('Mix', 0, 1, 0.01, () => cp.mix, v => { cp.mix = v; compPreset = null; }, v => (v >= 0.995 ? '100% wet' : Math.round(v * 100) + '% wet'), 1),
+        ruler('Makeup', 0, 24, 0.1, () => cp.makeup, v => { cp.makeup = v; }, dbs, 0),
+        ruler('Knee', 0, 40, 0.5, () => cp.knee, v => { cp.knee = v; compPreset = null; }, dbs, 6),
+        ruler('Input', -24, 24, 0.1, () => s.inGain, v => { s.inGain = v; }, dbs, 0, 360),
       ] : [
         modes(dynMode, [['comp', 'Compressor'], ['limit', 'Limiter']], m => { dynMode = m; renderPanel(); }, power(s.limit.on, () => { s.limit.on = !s.limit.on; })),
         ruler('Ceiling', -12, 0, 0.1, () => s.limit.ceiling, v => { s.limit.ceiling = v; }, dbs, -1),
@@ -822,6 +928,10 @@ export async function openEditor(track, app) {
       pkBar.style.background = pdb > -0.1 ? 'var(--danger)' : '';
       pkText.textContent = isFinite(pdb) ? pdb.toFixed(1) : '–∞';
     }
+    if (compCanvas.isConnected) {
+      if (chain.pre && playing) { chain.pre.getFloatTimeDomainData(preBuf); let pk = 0; for (const v of preBuf) pk = Math.max(pk, Math.abs(v)); inLevel = toDb(pk); } else inLevel = -Infinity;
+      drawComp();
+    }
     if (grBar?.isConnected) {
       const gr = chain.comp ? -chain.comp.reduction : 0;
       grBar.style.width = Math.min(100, (gr / 24) * 100) + '%';
@@ -841,7 +951,7 @@ export async function openEditor(track, app) {
     }
     const p = presets.find(p => p.id === v);
     if (!p) return;
-    try { s = { ...defaults(), ...JSON.parse(p.settings) }; } catch { return toast("That preset couldn't be read", { error: true }); }
+    try { s = { ...defaults(), ...JSON.parse(p.settings) }; s.comp = { ...defaults().comp, ...s.comp }; } catch { return toast("That preset couldn't be read", { error: true }); }
     syncLinked();
     rebuild(); live(); renderPanel();
     toast(`Loaded “${p.name}”`);
@@ -860,7 +970,7 @@ export async function openEditor(track, app) {
     if (s.tempo !== 1) out.push(`Tempo ${Math.round(s.tempo * 100)}%`);
     if (s.pitch !== 0) out.push(`Transpose ${sign(s.pitch)} st`);
     if (s.eqOn && s.eq.some(b => (HAS_GAIN(b.type) ? b.gain !== 0 : true))) out.push('EQ');
-    if (s.comp.on) out.push('Compressor');
+    if (s.comp.on) out.push(s.comp.mix < 0.995 ? `Compressor (${Math.round(s.comp.mix * 100)}% parallel)` : 'Compressor');
     if (s.limit.on) out.push('Limiter');
     if (s.inGain || s.outGain) out.push('Gain');
     if (s.pan) out.push('Pan');

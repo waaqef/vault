@@ -5,7 +5,7 @@ import { decodeAudio, bpmKeyOf, parseName } from './detect.js';
 import { peaksOf, waveSvg } from './wave.js';
 import { makeZip, safeName } from './zip.js';
 
-const APP_VERSION = '[vault] v2.9'; // shown in Settings and sent with bug reports
+const APP_VERSION = '[vault] v3.0'; // shown in Settings and sent with bug reports
 // ---- helpers ------------------------------------------------------------------
 const $ = (s, el = document) => el.querySelector(s);
 function h(tag, attrs = {}, ...kids) {

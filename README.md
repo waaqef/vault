@@ -43,7 +43,8 @@ Open http://localhost:8787. The password is whatever is in `.dev.vars` (create t
 - **Editor (⋯ → Edit audio):** you hear changes live. **Save** writes them into the audio as a new version (MP3 320 kbps by default, or 24-bit WAV; choose in Settings).
   - **Speed & pitch:** varispeed, tempo (keeps pitch), pitch (keeps tempo)
   - **EQ:** parametric, up to 8 bands. Drag the dots (hold Shift for fine moves); scroll over a dot to change its Q, or use the dials under it.
-  - **Dynamics:** compressor with a gain-reduction meter, limiter
+  - **Dynamics:** compressor with a curve you can drag (threshold sideways, ratio up and down), a live level dot, gain-reduction meter and Mix for parallel compression; limiter
+  - **Factory presets:** EQ (Clean up, Vocal clarity, Warm, Bass boost, Air, De-mud, Kick punch, Lo-fi phone) and compressor (Gentle glue, Vocal, Drum punch, Bass control, Parallel smash, Master bus)
   - **Gain & pan:** input and output gain, pan
   - **Waveform tools:** trim, cut, silence, fade in/out, normalize, reverse, mono, loop, undo
   - **Presets:** saved to your account, so they show up on every device
