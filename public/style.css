@@ -1252,8 +1252,7 @@ dialog.fsplayer::backdrop { background: rgba(0,0,0,.4); }
   box-shadow: 0 30px 70px rgba(0,0,0,.55), inset 0 0 0 1px rgba(255,255,255,.06); transform: scale(.86); transition: transform .55s var(--ease); }
 .fp-art.playing { transform: none; }
 /* touching the cover: a light under the finger, and a ripple when you let go (see artPress) */
-:has(> .fp-art) { perspective: 1000px; } /* so the tilt looks 3D */
-.fp-art { position: relative; overflow: hidden; touch-action: pan-y; -webkit-tap-highlight-color: transparent; user-select: none; }
+.fp-art { position: relative; overflow: hidden; touch-action: none; -webkit-tap-highlight-color: transparent; user-select: none; }
 .fp-art::after { content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; opacity: 0; transition: opacity .35s;
   background: radial-gradient(circle at var(--mx, 50%) var(--my, 50%), rgba(255,255,255,.28), rgba(255,255,255,.06) 35%, transparent 65%); mix-blend-mode: soft-light; }
 .fp-art.pressing::after { opacity: 1; transition-duration: .08s; }

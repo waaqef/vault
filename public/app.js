@@ -5,7 +5,7 @@ import { decodeAudio, bpmKeyOf, parseName, trackInfo, readTags, cleanTitle, lead
 import { peaksOf, waveSvg } from './wave.js';
 import { makeZip, safeName } from './zip.js';
 
-const APP_VERSION = '[vault] v3.6.5'; // shown in Settings and sent with bug reports
+const APP_VERSION = '[vault] v3.6.6'; // shown in Settings and sent with bug reports
 // ---- helpers ------------------------------------------------------------------
 const $ = (s, el = document) => el.querySelector(s);
 function h(tag, attrs = {}, ...kids) {
@@ -2354,7 +2354,7 @@ function openFullPlayer() {
   // swipe down to close: the whole sheet follows your finger
   let start = null;
   d.addEventListener('pointerdown', e => {
-    if (e.target.closest('button, input, .fp-scrub')) return;
+    if (e.target.closest('button, input, .fp-scrub, .fp-art')) return; // holding the cover doesn't drag the player
     start = { y: e.clientY, t: performance.now() };
     d.style.transition = 'none';
   });
@@ -3596,16 +3596,20 @@ document.addEventListener('touchmove', e => { if (e.touches.length > 1) e.preven
 // and letting go springs it back with a ripple from where you touched.
 const artPress = (() => {
   const reduce = matchMedia('(prefers-reduced-motion: reduce)');
-  const at = (el, e) => { const r = el.getBoundingClientRect(); return { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height, r }; };
-  const tilt = (x, y, deg) => `${(0.5 - y).toFixed(3)} ${(x - 0.5).toFixed(3)} 0 ${deg}deg`;
+  // The tilt is all in one transform (perspective first, so it looks 3D) on top of the cover's own size:
+  // smaller while paused, full size while playing.
+  const base = el => (el.classList.contains('playing') ? 1 : 0.86);
+  const pose = (el, x, y, deg, s) => `perspective(900px) rotate3d(${(0.5 - y).toFixed(3)}, ${(x - 0.5).toFixed(3)}, 0, ${deg}deg) scale(${(s * base(el)).toFixed(4)})`;
+  const at = (el, e) => { const r = el.getBoundingClientRect(); return { x: Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), y: Math.min(1, Math.max(0, (e.clientY - r.top) / r.height)) }; };
+  const light = (el, x, y) => { el.style.setProperty('--mx', `${x * 100}%`); el.style.setProperty('--my', `${y * 100}%`); };
   let down = null;
   const release = function (e) {
     if (!down) return;
     const { x, y } = down; down = null;
     this.classList.remove('pressing');
-    this.getAnimations().forEach(a => a.id === 'press' && a.cancel()); // the release spring takes over from the pressed pose
+    this.style.transition = ''; this.style.transform = '';
     if (reduce.matches) return;
-    this.animate([{ scale: '.94', rotate: tilt(x, y, 9) }, { scale: '1.035', rotate: tilt(x, y, -3), offset: 0.45 }, { scale: '.995', rotate: tilt(x, y, 1), offset: 0.75 }, { scale: '1', rotate: tilt(x, y, 0) }],
+    this.animate([{ transform: pose(this, x, y, 9, 0.94) }, { transform: pose(this, x, y, -3, 1.035), offset: 0.45 }, { transform: pose(this, x, y, 1, 0.995), offset: 0.75 }, { transform: pose(this, x, y, 0, 1) }],
       { duration: 620, easing: 'cubic-bezier(.2,.8,.2,1)' });
     if (e.type !== 'pointerup') return;
     const r = this.getBoundingClientRect(), size = Math.hypot(r.width, r.height) * 2;
@@ -3615,20 +3619,27 @@ const artPress = (() => {
   };
   return {
     onpointerdown(e) {
+      try { this.setPointerCapture(e.pointerId); } catch {} // keeps following the finger / cursor, even off the cover
       const { x, y } = at(this, e);
       down = { x, y };
-      this.style.setProperty('--mx', `${x * 100}%`); this.style.setProperty('--my', `${y * 100}%`);
+      light(this, x, y);
       this.classList.add('pressing');
       haptic();
-      if (!reduce.matches) this.animate([{ scale: '1', rotate: tilt(x, y, 0) }, { scale: '.94', rotate: tilt(x, y, 9) }], { duration: 160, easing: 'cubic-bezier(.3,.7,.4,1)', fill: 'forwards', id: 'press' });
+      if (reduce.matches) return;
+      // sink in, then hold that pose inline so moving can update it
+      this.style.transition = 'transform .16s cubic-bezier(.3,.7,.4,1)';
+      this.style.transform = pose(this, x, y, 9, 0.94);
     },
     onpointermove(e) {
       if (!down) return;
       const { x, y } = at(this, e);
       down = { x, y };
-      this.style.setProperty('--mx', `${x * 100}%`); this.style.setProperty('--my', `${y * 100}%`);
+      light(this, x, y);
+      if (reduce.matches) return;
+      this.style.transition = 'transform .09s linear';
+      this.style.transform = pose(this, x, y, 9, 0.94);
     },
-    onpointerup: release, onpointercancel: release, onpointerleave: release,
+    onpointerup: release, onpointercancel: release,
   };
 })();
 // ---- swipe gestures (touch) ----
