@@ -82,14 +82,14 @@ function updateBucket(auth) {
   }).then(r => r.json());
 }
 
-// `node setup.mjs google`: only the Google Drive sign-in (for invited accounts). Leaves everything else as it is.
+// `node setup.mjs google`: only the Google Drive sign-in (for people's accounts). Leaves everything else as it is.
 if (process.argv[2] === 'google') {
   console.log(`\nGoogle Cloud console → APIs & Services → Credentials → your OAuth client (Web application).
 Its Authorized redirect URI must be exactly: ${APP_ORIGIN}/api/drive/callback\n`);
   const id = await ask('Client ID: '), secret = await ask('Client secret: ', true);
   if (!/\.apps\.googleusercontent\.com$/.test(id) || !secret) { console.error("\nThat doesn't look like a Google OAuth client ID and secret.\n"); process.exit(1); }
   saveSecrets({ GOOGLE_CLIENT_ID: id, GOOGLE_CLIENT_SECRET: secret });
-  console.log('\nDone! Invited accounts can now connect Google Drive.\n');
+  console.log('\nDone! New accounts can now connect Google Drive.\n');
   process.exit(0);
 }
 

@@ -93,7 +93,7 @@ const clearFails = (env, key) => env.DB.prepare('DELETE FROM login_attempts WHER
 const lockMessage = secs => `Too many wrong attempts. Try again in ${Math.ceil(secs / 60)} min.`;
 
 // ---- file storage -------------------------------------------------------
-// The admin's files: Backblaze B2 (S3 API). Invited users' files: their own Google Drive (drive.js).
+// The admin's files: Backblaze B2 (S3 API). Everyone else's files: their own Google Drive (drive.js).
 // Local dev (`npm run dev:local`): everyone uses a simulated R2 bucket behind /blob/*.
 const s3 = env => new AwsClient({ accessKeyId: env.B2_KEY_ID, secretAccessKey: env.B2_APP_KEY, service: 's3', region: env.B2_REGION });
 const objUrl = (env, key) => `${env.B2_ENDPOINT}/${env.B2_BUCKET}/${key}`;
@@ -895,29 +895,8 @@ const drivePage = msg => `<!doctype html><meta charset="utf-8"><meta name="viewp
 <body style="margin:0;min-height:100vh;display:grid;place-items:center;background:#191919;color:#fff;font:16px/1.5 system-ui,sans-serif;text-align:center;padding:24px">
 <div><div style="font-weight:600;font-size:22px;margin-bottom:10px">[vault]</div><p>${msg === 'connected' ? 'Google Drive is connected. Go back to the [vault] app.' : String(msg).replace(/[<>&"]/g, '')}</p></div>`;
 
-// ---- admin: invites and people ----
+// ---- admin: people ----
 const adminOnly = u => (u.is_admin ? null : fail('Only the admin can do that', 403));
-on('GET', '/api/admin/invites', async (req, env, b, p, url, ctx, u) =>
-  adminOnly(u) || json((await env.DB.prepare('SELECT i.code, i.created_at, i.used_at, x.username AS used_by FROM invites i LEFT JOIN users x ON x.id = i.used_by ORDER BY i.created_at DESC LIMIT 100').all()).results));
-on('POST', '/api/admin/invites', async (req, env, b, p, url, ctx, u) => {
-  if (adminOnly(u)) return adminOnly(u);
-  const abc = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789', bytes = crypto.getRandomValues(new Uint8Array(8));
-  const code = [...bytes].map(x => abc[x % abc.length]).join('').replace(/(.{4})/, '$1-');
-  await env.DB.prepare('INSERT INTO invites (code, created_by, created_at) VALUES (?, ?, ?)').bind(code, u.id, now()).run();
-  return json({ code });
-});
-on('DELETE', '/api/admin/invites/:code', async (req, env, b, { code }, url, ctx, u) => {
-  if (adminOnly(u)) return adminOnly(u);
-  await env.DB.prepare('DELETE FROM invites WHERE code = ?').bind(code).run(); // a used code can go too: the account stays
-  return json({ ok: true });
-});
-on('GET', '/api/admin/requests', async (req, env, b, p, url, ctx, u) =>
-  adminOnly(u) || json((await env.DB.prepare('SELECT id, name, contact, message, created_at FROM access_requests ORDER BY created_at DESC LIMIT 100').all()).results));
-on('DELETE', '/api/admin/requests/:id', async (req, env, b, { id }, url, ctx, u) => {
-  if (adminOnly(u)) return adminOnly(u);
-  await env.DB.prepare('DELETE FROM access_requests WHERE id = ?').bind(Number(id) || 0).run();
-  return json({ ok: true });
-});
 on('GET', '/api/admin/users', async (req, env, b, p, url, ctx, u) => {
   if (adminOnly(u)) return adminOnly(u);
   const { results } = await env.DB.prepare(`SELECT x.id, x.username, x.display_name, x.avatar, x.is_admin, x.storage, x.disabled, x.created_at, x.drive_refresh IS NOT NULL AS drive,
@@ -995,14 +974,12 @@ async function login(req, env) {
   await clearFails(env, lockKey);
   return json({ ok: true }, 200, { 'set-cookie': await authCookie(env, user) });
 }
+// Anyone can sign up. ponytail: a few new accounts per address per 15 minutes (the login lockout's counter) keeps
+// scripted sign-ups down; add a captcha if that stops being enough.
 async function signup(req, env) {
   const lockKey = 'signup:' + clientIp(req), wait = await lockedFor(env, lockKey);
-  if (wait) return fail(lockMessage(wait), 429);
+  if (wait) return fail(`Too many new accounts from here. Try again in ${Math.ceil(wait / 60)} min.`, 429);
   const b = await req.json().catch(() => ({}));
-  const code = String(b.invite || '').trim().toUpperCase();
-  const invite = code && await env.DB.prepare('SELECT * FROM invites WHERE code = ?').bind(code).first();
-  if (!invite || invite.used_by) { await recordFail(env, lockKey); return fail(invite ? 'That invite code was already used' : "That invite code doesn't exist", 400); }
-  if (b.checkOnly) return json({ ok: true }); // step 1 of sign-up just checks the code
   const name = String(b.username || '').trim().toLowerCase();
   if (!USERNAME_RE.test(name)) return fail('Usernames are 3–24 letters, numbers, dots, dashes or underscores.');
   if (await env.DB.prepare('SELECT 1 FROM users WHERE username = ?').bind(name).first()) return fail('That username is taken.');
@@ -1010,15 +987,10 @@ async function signup(req, env) {
   if (String(b.password).length > 200) return fail('Use 200 characters or fewer for your password.');
   if (b.avatar && !AVATAR_RE.test(b.avatar)) return fail('That picture didn\'t work. Try another one.');
   const id = uid(), salt = uid();
-  // One transaction: the account is made only if the code is still free, and the code is used only if the account was
-  // made (two people grabbing the same username can't burn the invite).
-  const [made] = await env.DB.batch([
-    env.DB.prepare("INSERT INTO users (id, username, display_name, pass_salt, pass_hash, is_admin, avatar, storage, session, created_at) SELECT ?, ?, ?, ?, ?, 0, ?, 'drive', ?, ? WHERE EXISTS (SELECT 1 FROM invites WHERE code = ? AND used_by IS NULL)")
-      .bind(id, name, cleanName(b.display_name, 40) || null, salt, await passHash(env, salt, String(b.password)), b.avatar || null, uid(), now(), code),
-    env.DB.prepare('UPDATE invites SET used_by = ?, used_at = ? WHERE code = ? AND used_by IS NULL').bind(id, now(), code),
-  ]).catch(e => { throw /UNIQUE/i.test(e.message) ? userError('That username is taken.') : e; });
-  if (!made.meta.changes) return fail('That invite code was just used');
-  await clearFails(env, lockKey);
+  await env.DB.prepare("INSERT INTO users (id, username, display_name, pass_salt, pass_hash, is_admin, avatar, storage, session, created_at) VALUES (?, ?, ?, ?, ?, 0, ?, 'drive', ?, ?)")
+    .bind(id, name, cleanName(b.display_name, 40) || null, salt, await passHash(env, salt, String(b.password)), b.avatar || null, uid(), now()).run()
+    .catch(e => { throw /UNIQUE/i.test(e.message) ? userError('That username is taken.') : e; }); // two people grabbing the same name
+  await recordFail(env, lockKey); // counts towards the few-per-address limit
   return json({ ok: true }, 200, { 'set-cookie': await authCookie(env, await getUser(env, id)) });
 }
 
@@ -1176,20 +1148,6 @@ async function previewFile(env, req, t, owner) {
   return new Response(r.body, { status: m ? 206 : 200, headers });
 }
 
-// Ask the admin for an invite (from the sign-up screen, or a share page's sign-in card). A few per address, then a wait.
-async function requestInvite(req, env, ctx, url, token = null) {
-  const lockKey = 'request:' + clientIp(req), wait = await lockedFor(env, lockKey);
-  if (wait) return fail(lockMessage(wait), 429);
-  const b = await req.json().catch(() => ({}));
-  const name = String(b.name || '').trim().slice(0, 80);
-  if (!name) return fail('Add your name');
-  await recordFail(env, lockKey);
-  await env.DB.prepare('INSERT INTO access_requests (share_token, name, contact, message, created_at) VALUES (?, ?, ?, ?, ?)')
-    .bind(token, name, String(b.contact || '').trim().slice(0, 200), String(b.message || '').trim().slice(0, 500), now()).run();
-  notify(ctx, env, OWNER, { title: `${name} wants an invite to [vault]`, body: String(b.message || b.contact || (token ? 'From a share link' : 'From the sign-up screen')).slice(0, 200), tag: 'request', url: '/' }, url.origin);
-  return json({ ok: true });
-}
-
 async function handleShare(req, env, url, ctx) {
   const [, , token, action, trackId] = url.pathname.split('/');
   const s = await openShare(env, token);
@@ -1221,7 +1179,6 @@ async function handleShare(req, env, url, ctx) {
   const owner = () => getUser(env, s.owner_id);
   const viewer = await userFromCookie(req, env); // signed in to [vault]? (full songs, downloads, saving)
 
-  if (action === 'request' && req.method === 'POST') return requestInvite(req, env, ctx, url, token);
   if (action === 'save') {
     if (!viewer) return fail('Sign in to save this', 401);
     if (req.method === 'DELETE') await env.DB.prepare('DELETE FROM saved_shares WHERE user_id = ? AND token = ?').bind(viewer.id, token).run();
@@ -1325,7 +1282,6 @@ export default {
 
       if (path === '/api/login' && req.method === 'POST') return await login(req, env);
       if (path === '/api/signup' && req.method === 'POST') return await signup(req, env);
-      if (path === '/api/request-invite' && req.method === 'POST') return await requestInvite(req, env, ctx, url);
       if (path === '/api/logout') return json({ ok: true }, 200, { 'set-cookie': setCookie('auth', '', '/', 0) });
       if (path === '/api/shortcut-upload' && req.method === 'POST') return await shortcutUpload(req, env, url);
       if (path === '/api/drive/callback') return await driveCallback(req, env, url);

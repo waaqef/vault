@@ -240,34 +240,11 @@ function showLogin() {
       history.replaceState(null, '', '/library' + location.search); // signed in: the address becomes the library
       d.close(); load();
     }, h('label', {}, '[username]', user), h('label', {}, '[password]', pw), err(), h('button', { className: 'btn primary', style: big }, 'Sign in')),
-    link('Have an invite code? Sign up', signUp),
+    link('New here? Make an account', signUp),
     h('small', { className: 'login-links' }, h('a', { href: '/' }, 'About'), h('a', { href: '/privacy' }, 'Privacy'), h('a', { href: '/terms' }, 'Terms')));
   }
-  // Sign up, step 1: the invite code.
+  // Sign up: username, password and an optional profile picture (then Connect Google Drive).
   function signUp() {
-    const code = field('text', 'one-time-code', { required: true, placeholder: 'XXXX-XXXX', style: { textTransform: 'uppercase', textAlign: 'center', letterSpacing: '.12em' } });
-    fill(box, head, h('div', { className: 'brandmark' }, '[sign up]'), form(async () => {
-      await api('/signup', { method: 'POST', body: { invite: code.value, checkOnly: true } });
-      profile(code.value.trim().toUpperCase());
-    }, h('label', {}, '[invite code]', code), err(), h('button', { className: 'btn primary', style: big }, 'Next')),
-    link('No invite code? Ask for one', askInvite),
-    link('Back to sign in', signIn));
-  }
-  // No code: send the admin a request (they get a notification, and it shows in People).
-  function askInvite() {
-    const nm = field('text', 'name', { required: true, maxLength: 80 }), ct = field('text', 'email', { maxLength: 200, placeholder: 'Instagram, email, number…' });
-    const note = field('text', 'off', { maxLength: 500, placeholder: 'Optional' });
-    fill(box, head, h('div', { className: 'brandmark' }, '[ask for an invite]'), form(async () => {
-      await api('/request-invite', { method: 'POST', body: { name: nm.value, contact: ct.value, message: note.value } });
-      fill(box, head, h('div', { className: 'brandmark' }, '[request sent]'),
-        h('p', { className: 'muted', style: { margin: 0 } }, "You'll hear back if you get an invite code. When you do, choose “Have an invite code? Sign up”."),
-        link('Back to sign in', signIn));
-    }, h('label', {}, '[your name]', nm), h('label', {}, '[how to reach you]', ct), h('label', {}, '[a note]', note), err(),
-    h('button', { className: 'btn primary', style: big }, 'Send request')),
-    link('Back', signUp));
-  }
-  // Step 2: username, password and an optional profile picture.
-  function profile(invite) {
     let avatar = null;
     const pic = h('button', { type: 'button', className: 'avatar xl pick', 'aria-label': 'Choose a profile picture', async onclick() {
       const [file] = await pickFiles('image/*,.heic,.heif', false);
@@ -277,14 +254,16 @@ function showLogin() {
     const shown = field('text', 'name', { maxLength: 40, placeholder: 'e.g. Maya Lee', autocapitalize: 'words' });
     const user = field('text', 'username', { required: true, minLength: 3, maxLength: 24, pattern: '[A-Za-z0-9._\\-]+', placeholder: 'letters, numbers, . _ -' });
     const pw = field('password', 'new-password', { required: true, minLength: 8 }), again = field('password', 'new-password', { required: true });
-    fill(box, h('div', { className: 'brandmark' }, '[your account]'), form(async () => {
+    fill(box, h('div', { className: 'brandmark' }, '[make an account]'), form(async () => {
       if (pw.value !== again.value) throw new Error("The passwords don't match.");
-      await api('/signup', { method: 'POST', body: { invite, username: user.value.trim(), display_name: shown.value.trim(), password: pw.value, avatar } });
+      await api('/signup', { method: 'POST', body: { username: user.value.trim(), display_name: shown.value.trim(), password: pw.value, avatar } });
+      history.replaceState(null, '', '/library' + location.search.replace(/[?&]signup=1/, '').replace(/^&/, '?'));
       driveStep(box, d);
     }, pic, h('small', { className: 'muted' }, 'Profile picture (optional)'),
     h('label', {}, '[name] what people see (optional)', shown), h('label', {}, '[username] unique, for signing in', user), h('label', {}, '[password] 8+ characters', pw), h('label', {}, '[password again]', again), err(),
     h('button', { className: 'btn primary', style: big }, 'Create account')),
-    link('Back', signUp));
+    link('Already have an account? Sign in', signIn),
+    h('small', { className: 'login-links' }, h('a', { href: '/privacy' }, 'Privacy'), h('a', { href: '/terms' }, 'Terms')));
   }
   new URLSearchParams(location.search).has('signup') ? signUp() : signIn();
 }
@@ -1507,7 +1486,7 @@ function trackMenu(t, list) {
   ]);
 }
 
-// Inbox: every notification (comments, listens, invite requests, projects shared with you), newest first.
+// Inbox: every notification (comments, listens, projects shared with you), newest first.
 async function inboxDialog() {
   document.body.classList.remove('side-open');
   const list = h('div', { className: 'list' }, h('div', { className: 'muted' }, 'Loading…'));
@@ -1518,13 +1497,12 @@ async function inboxDialog() {
     const track = /^\/\?track=([\w-]+)$/.exec(url || '')?.[1];
     if (track && trackOf(track)) (canEdit(trackOf(track).project_id) ? detailsDialog : commentsDialog)(trackOf(track));
     else if (/^\/s\/[0-9a-f]{32}$/.test(url || '')) location.href = url;
-    else if (url === '/' && S.me?.isAdmin && /invite/.test(lastTitle)) peopleDialog();
   };
   let lastTitle = '';
   const rows = await api('/inbox').catch(e => (oops(e), []));
   fill(list, rows.length ? rows.map(n => h('button', { type: 'button', className: 'item inbox-item' + (n.read ? '' : ' unread'), onclick: () => { lastTitle = n.title; open(n.url); } },
     h('span', { className: 'grow' }, h('b', {}, n.title), n.body && h('div', { className: 'muted' }, n.body), h('div', { className: 'mono', style: { color: 'var(--fg-3)', fontSize: '11px' } }, fmtDate(n.created_at)))))
-    : h('div', { className: 'muted' }, 'Nothing yet. Comments, listens, invite requests and projects shared with you show up here.'));
+    : h('div', { className: 'muted' }, 'Nothing yet. Comments, listens and projects shared with you show up here.'));
   if (S.unread) { S.unread = 0; renderSide(); api('/inbox/read', { method: 'POST' }).catch(() => {}); }
 }
 
@@ -2518,14 +2496,14 @@ async function settingsDialog(only) {
         } }, 'Change')),
       S.me?.storage === 'drive' && row('Google Drive', S.me.driveEmail || (S.me.driveConnected ? 'Connected' : 'Not connected'),
         h('a', { className: 'btn', href: '/api/drive/connect' }, S.me.driveConnected ? 'Reconnect' : 'Connect')),
-      S.me?.isAdmin && row('People', 'Invite codes and accounts', h('button', { className: 'btn', onclick: () => { d.close(); peopleDialog(); } }, 'Manage')),
+      S.me?.isAdmin && row('People', 'Everyone with an account', h('button', { className: 'btn', onclick: () => { d.close(); peopleDialog(); } }, 'Manage')),
       row('Password', 'Changing it logs out your other devices', h('button', { className: 'btn', onclick: () => { d.close(); passwordDialog(); } }, 'Change')),
       row('Log out', 'On this device only. Songs kept on this device are removed.', h('button', { className: 'btn danger', onclick: logout }, 'Log out')),
       S.me && !S.me.isAdmin && row('Delete account', 'Deletes your projects and the files [vault] made in your Google Drive. This can\'t be undone.',
         h('button', { className: 'btn danger', onclick: () => { d.close(); deleteAccountDialog(); } }, 'Delete'))),
     !only && h('div', { className: 'set-sec' }, h('h3', {}, '[support]'),
       row('Support [vault]', 'Free, no ads. Tips help keep it that way.', h('a', { className: 'btn', href: 'https://ko-fi.com/choseroxy', target: '_blank', rel: 'noopener' }, 'Tip ☕'))),
-    h('div', { className: 'btns' }, h('span', { className: 'mono', style: { marginRight: 'auto', color: 'var(--fg-3)', alignSelf: 'center' } }, '[vault] v2.4.3'),
+    h('div', { className: 'btns' }, h('span', { className: 'mono', style: { marginRight: 'auto', color: 'var(--fg-3)', alignSelf: 'center' } }, '[vault] v2.5'),
       h('button', { className: 'btn primary', onclick: () => d.close() }, 'Done'))), { className: 'settings-dlg' });
   if (only) d.querySelectorAll('.set-sec').forEach(sec => sec.querySelector('h3').textContent !== `[${only}]` && sec.remove());
   api('/versions/old').then(({ count, size }) => {
@@ -2621,26 +2599,14 @@ function deleteAccountDialog() {
   h('div', { className: 'btns' }, h('button', { type: 'button', className: 'btn ghost', onclick: () => d.close() }, 'Cancel'), h('button', { className: 'btn danger' }, 'Delete my account'))));
 }
 
-// Admin: make invite codes, see who has an account, turn accounts off or delete them.
+// Admin: see who has an account, turn accounts off, reset passwords or delete accounts.
 async function peopleDialog() {
   const box = h('div', { className: 'stack' }, h('div', { className: 'muted' }, 'Loading…'));
   const d = dialog(h('div', { className: 'stack' }, h('h2', {}, 'People'), box,
     h('div', { className: 'btns' }, h('button', { className: 'btn primary', onclick: () => d.close() }, 'Done'))), { className: 'settings-dlg' });
-  const copy = async text => { try { await navigator.clipboard.writeText(text); toast('Copied', { ms: 1200 }); } catch { prompt('Copy this', text, { label: 'Code', ok: 'Done' }); } };
   async function draw() {
-    const [users, invites, requests] = await Promise.all([api('/admin/users'), api('/admin/invites'), api('/admin/requests')]).catch(e => (oops(e), [[], [], []]));
-    const open = invites;
+    const users = await api('/admin/users').catch(e => (oops(e), []));
     fill(box,
-      requests.length > 0 && h('div', { className: 'set-sec' }, h('h3', {}, '[invite requests]'),
-        requests.map(r => h('div', { className: 'set-row' }, h('div', { className: 't' }, r.name, h('small', {}, [r.contact, r.message, fmtAdded(r.created_at)].filter(Boolean).join(' · '))),
-          h('button', { className: 'btn ghost', onclick: () => api(`/admin/requests/${r.id}`, { method: 'DELETE' }).then(draw, oops) }, 'Dismiss')))),
-      h('div', { className: 'set-sec' }, h('h3', {}, '[invite codes]'),
-        h('p', { className: 'muted', style: { margin: 0 } }, 'Each code makes one account. Send it to someone, and they choose “Sign up” on the login screen.'),
-        open.map(i => h('div', { className: 'set-row' + (i.used_by ? ' used' : '') }, h('div', { className: 't' }, h('code', { className: 'mono' }, i.code),
-            h('small', {}, i.used_by ? `Used by ${i.used_by} · ${fmtAdded(i.used_at).toLowerCase()}` : `Not used yet · made ${fmtAdded(i.created_at).toLowerCase()}`)),
-          h('span', { className: 'btns', style: { margin: 0 } }, !i.used_by && h('button', { className: 'btn', onclick: () => copy(i.code) }, 'Copy'),
-            h('button', { className: 'btn danger', async onclick() { await api(`/admin/invites/${i.code}`, { method: 'DELETE' }).catch(oops); draw(); } }, 'Delete')))),
-        h('button', { className: 'btn', async onclick() { const { code } = await api('/admin/invites', { method: 'POST' }).catch(oops) || {}; if (code) await copy(code); draw(); } }, icon('plus', 14), 'New invite code')),
       h('div', { className: 'set-sec' }, h('h3', {}, '[accounts]'),
         users.map(u => h('div', { className: 'set-row' }, h('span', { className: 'me-row' }, avatarEl(u, 'avatar lg'),
           h('span', {}, nameOf(u) + (u.display_name ? ` @${u.username}` : '') + (u.disabled ? ' (off)' : ''), h('small', {}, u.is_admin ? `Admin · Backblaze · ${fmtBytes(u.used)}` : `${u.tracks} ${u.tracks === 1 ? 'track' : 'tracks'} · ${fmtBytes(u.used)} · ${u.drive ? 'Google Drive' : 'Drive not connected'}`))),

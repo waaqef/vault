@@ -79,26 +79,7 @@ function show(d) {
   const gate = full ? null : el('div', { className: 'gate' },
     el('div', { className: 'mono', textContent: '[preview]' }),
     el('p', { textContent: 'You\u2019re hearing ' + d.preview + '-second previews. Sign in to [vault] to hear the full songs, comment' + (d.allow_download ? ', download' : '') + ' and save this to your library.' }),
-    el('div', { className: 'acts' }, el('a', { href: '/login?next=' + next, textContent: 'Sign in' }), el('a', { className: 'alt', href: '/login?signup=1&next=' + next, textContent: 'Sign up with an invite code' })),
-    askInvite());
-  // No invite code? Send the admin a request (name, how to reach you, a note).
-  function askInvite() {
-    const nm = el('input', { placeholder: 'Your name', maxLength: 80, required: true, value: name }), ct = el('input', { placeholder: 'How to reach you (Instagram, email…)', maxLength: 200 });
-    const note = el('input', { placeholder: 'A note (optional)', maxLength: 500 }), msg = el('div', { className: 'mono' });
-    const f = el('form', { className: 'req', hidden: true }, nm, ct, note, el('button', { textContent: 'Ask for an invite' }), msg);
-    f.onsubmit = async e => {
-      e.preventDefault(); f.querySelector('button').disabled = true;
-      try {
-        const r = await fetch(base + '/request', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: nm.value, contact: ct.value, message: note.value }) });
-        const j = await r.json();
-        if (!r.ok) throw new Error(j.error || 'That didn’t send');
-        f.replaceChildren(el('p', { textContent: 'Sent. You’ll hear back if you get an invite.' }));
-      } catch (x) { msg.textContent = x.message; f.querySelector('button').disabled = false; }
-    };
-    const open = el('button', { className: 'linkish', type: 'button', textContent: 'No invite code? Ask for one' });
-    open.onclick = () => { open.remove(); f.hidden = false; nm.focus(); };
-    return el('div', {}, open, f);
-  }
+    el('div', { className: 'acts' }, el('a', { href: '/login?next=' + next, textContent: 'Sign in' }), el('a', { className: 'alt', href: '/login?signup=1&next=' + next, textContent: 'Make a free account' })));
   const nudge = () => { gate.classList.add('ping'); gate.scrollIntoView({ behavior: 'smooth', block: 'center' }); setTimeout(() => gate.classList.remove('ping'), 900); };
   const ck = d.cover || d.tracks.find(t => t.cover)?.cover;
   const cover = el('div', { className: 'cover' + (ck ? '' : ' disc') });

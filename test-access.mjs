@@ -33,18 +33,20 @@ try {
 
   const owner = (await call(null, 'POST', '/api/login', { password: PW })).cookie;
   assert.ok(owner, 'admin logs in with the admin password');
+  // anyone can sign up (each test account from its own address, so the few-per-address limit doesn't kick in)
+  let ip = 0;
   const person = async (name, display_name) => {
-    const { data } = await call(owner, 'POST', '/api/admin/invites');
-    const r = await call(null, 'POST', '/api/signup', { invite: data.code, username: name, display_name, password: 'password123' });
-    assert.ok(r.cookie, `${name} signs up with an invite (${JSON.stringify(r.data)})`);
+    const r = await call(null, 'POST', '/api/signup', { username: name, display_name, password: 'password123' }, { 'cf-connecting-ip': `10.0.0.${++ip}` });
+    assert.ok(r.cookie, `${name} signs up (${JSON.stringify(r.data)})`);
     return r.cookie;
   };
   const [editor, listener, stranger] = [await person('eddie'), await person('lisa', 'Lisa L'), await person('stranger')];
 
-  // usernames are unique; trying a taken one doesn't use up the invite
-  const { data: { code } } = await call(owner, 'POST', '/api/admin/invites');
-  assert.equal((await call(null, 'POST', '/api/signup', { invite: code, username: 'lisa', password: 'password123' })).data.error, 'That username is taken.');
-  assert.ok((await call(null, 'POST', '/api/signup', { invite: code, username: 'lisa2', password: 'password123' })).cookie, 'the invite still works after a taken username');
+  // usernames are unique
+  assert.equal((await call(null, 'POST', '/api/signup', { username: 'lisa', password: 'password123' }, { 'cf-connecting-ip': '10.0.1.1' })).data.error, 'That username is taken.');
+  // only a few new accounts per address
+  for (let i = 0; i < 5; i++) await call(null, 'POST', '/api/signup', { username: `burst${i}`, password: 'password123' }, { 'cf-connecting-ip': '10.0.2.1' });
+  assert.equal((await call(null, 'POST', '/api/signup', { username: 'burst9', password: 'password123' }, { 'cf-connecting-ip': '10.0.2.1' })).status, 429, 'sign-ups from one address are limited');
 
   const { data: { id: project } } = await call(owner, 'POST', '/api/projects', { name: 'Beats' });
   const audio = wav(10), up = (await call(owner, 'POST', '/api/upload-url', { name: 'a.wav', type: 'audio/wav', size: audio.length })).data;

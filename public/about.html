@@ -2,7 +2,7 @@
 <html lang="en"><head><meta charset="utf-8">
 <meta name="google-site-verification" content="AwZROeWlcE2W6l0G8zCBkiztAELaZ0ZhEjsrzLFo0S0" /><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>[vault] Music project storage</title>
-<meta name="description" content="[vault] is an open-source personal project: a private, invite-only app for storing, playing, editing and sharing work-in-progress music projects.">
+<meta name="description" content="[vault] is an open-source personal project: a free app for storing, playing, editing and sharing work-in-progress music projects.">
 <meta name="theme-color" content="#191919">
 <link rel="icon" href="/icon.svg">
 <style>
@@ -39,6 +39,14 @@ a { color: inherit; }
 .grain { position: fixed; inset: 0; z-index: -1; pointer-events: none; background: var(--grain-soft) 0 0 / 160px; }
 
 /* nav */
+/* "now public" ribbon at the very top: it fades and lifts away as you scroll */
+.ribbon { position: relative; z-index: 11; display: flex; justify-content: center; padding: 10px 16px 0; transition: opacity .2s linear; will-change: opacity, transform; }
+.ribbon a { display: inline-flex; align-items: center; gap: 10px; padding: 7px 8px 7px 14px; border-radius: 999px; text-decoration: none; font-size: 13px; color: var(--fg); }
+.ribbon .dot { width: 7px; height: 7px; border-radius: 50%; background: #3ecf8e; box-shadow: 0 0 0 4px rgba(62,207,142,.18); animation: ping 2.2s var(--ease) infinite; }
+.ribbon b { font-weight: 600; }
+.ribbon .go { font-family: var(--mono); font-size: 11px; color: var(--fg-2); padding: 4px 10px; border-radius: 999px; background: rgba(255,255,255,.08); }
+@keyframes ping { 50% { box-shadow: 0 0 0 7px rgba(62,207,142,0); } }
+@media (prefers-reduced-motion: reduce) { .ribbon .dot { animation: none; } }
 nav { position: sticky; top: 12px; z-index: 10; max-width: 1080px; margin: 12px auto 0; padding: 8px 8px 8px 18px; border-radius: 999px; display: flex; align-items: center; gap: 6px; }
 nav .brand { font-weight: 600; font-size: 17px; letter-spacing: -0.035em; text-decoration: none; margin-right: auto; }
 nav .lnk { font-family: var(--mono); font-size: 12px; color: var(--fg-2); text-decoration: none; padding: 8px 10px; border-radius: 999px; transition: color .15s, background .15s; }
@@ -165,6 +173,7 @@ footer .brand { margin-right: auto; font-weight: 600; letter-spacing: -0.035em; 
 <div class="wash" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
 <div class="grain" aria-hidden="true"></div>
 
+<div class="ribbon" id="ribbon"><a class="glass" href="/login?signup=1"><span class="dot" aria-hidden="true"></span><span><b>[vault] is now public.</b> Anyone can make a free account.</span><span class="go">Sign up →</span></a></div>
 <nav class="glass" aria-label="Main">
   <a class="brand" href="/">[vault]</a>
   <a class="lnk" href="#features">[features]</a>
@@ -177,8 +186,8 @@ footer .brand { margin-right: auto; font-weight: 600; letter-spacing: -0.035em; 
   <header class="hero">
     <div>
       <h1>[vault]</h1>
-      <p class="sub">An open-source personal project for storing and working on music projects, inspired by [untitled]. Upload beats, demos and ideas, play them on any device, edit the audio, and share them with a link. Invite only.</p>
-      <div class="ctas"><a class="btn primary" href="/login">Sign in</a><a class="btn ghost" href="/login?signup=1">Have an invite code?</a></div>
+      <p class="sub">An open-source personal project for storing and working on music projects, inspired by [untitled]. Upload beats, demos and ideas, play them on any device, edit the audio, and share them with a link. Free for anyone.</p>
+      <div class="ctas"><a class="btn primary" href="/login">Sign in</a><a class="btn ghost" href="/login?signup=1">Make a free account</a></div>
     </div>
     <div class="stage" aria-hidden="true">
       <div class="lib glass">
@@ -259,7 +268,7 @@ footer .brand { margin-right: auto; font-weight: 600; letter-spacing: -0.035em; 
   <section id="drive">
     <span class="mono">[your data]</span>
     <h2>Where your music is stored</h2>
-    <p class="lede">[vault] is invite-only. When you sign up, you connect Google Drive, and everything you upload is stored there, in your space and under your control. Here's exactly what [vault] can and can't do with that access.</p>
+    <p class="lede">When you sign up, you connect Google Drive, and everything you upload is stored there, in your space and under your control. Here's exactly what [vault] can and can't do with that access.</p>
     <div class="drive">
       <div class="flow glass rise">
         <div class="node"><span class="ic">[v]</span><div>[vault]<small>the app</small></div></div>
@@ -313,6 +322,10 @@ const tick = () => {
   s = (s + 1) % LEN;
 };
 tick(); if (!still) setInterval(tick, 1000);
+// The "now public" ribbon fades and lifts away over the first ~120px of scrolling.
+const ribbon = document.getElementById('ribbon');
+const fadeRibbon = () => { const p = Math.min(1, scrollY / 120); ribbon.style.opacity = 1 - p; ribbon.style.transform = `translateY(${-p * 14}px)`; ribbon.style.pointerEvents = p > 0.9 ? 'none' : ''; };
+addEventListener('scroll', fadeRibbon, { passive: true }); fadeRibbon();
 // Cards rise in as they scroll into view.
 const io = new IntersectionObserver(es => es.forEach(e => e.isIntersecting && (e.target.classList.add('in'), io.unobserve(e.target))), { threshold: .12 });
 document.querySelectorAll('.rise').forEach(el => io.observe(el));
