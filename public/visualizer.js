@@ -1,6 +1,7 @@
-// The visualizer: Alchemy, after Windows Media Player's. A small 3D world that moves with the music: every several
-// seconds it jumps to a random scene (ribbons of dots, bead pillars, waveform sheets, zigzag bursts, rays, rings,
-// string art, wires with stars, a haze), with new colours and a new way the camera and trails move. Each frame is
+// The visualizer: Alchemy, after Windows Media Player's. A small 3D world that moves with the music, in the cover's
+// colours. A metronome runs at the song's BPM: every beat punches the picture (zoom, flash, a jolt to the camera),
+// and every 8 beats it's a random new scene (ribbons of dots, bead pillars, waveform sheets, zigzag bursts, rays,
+// rings, string art, wires with stars, a haze), with a new way the camera and trails move. Each frame is
 // drawn over the last one (slightly moved and faded), so one scene melts into the next.
 // Tap for a new scene.
 //
@@ -65,11 +66,13 @@ export function openVisualizer(host, audio, info, { icon, haptic = () => {}, onC
   // itself every frame is the costly part, and the softness of the stretch is the original's look anyway.
   const fit = () => { W = el.clientWidth; H = el.clientHeight; dpr = Math.min(devicePixelRatio || 1, Math.sqrt(700000 / Math.max(1, W * H))); cv.width = buf.width = Math.round(W * dpr); cv.height = buf.height = Math.round(H * dpr); };
   fit(); addEventListener('resize', fit);
-  let cols = ['170,190,255'], lastInfo = '';
+  let pal = null, lastInfo = ''; // the cover's colours as { h, s } (null: a black-and-white cover, so it draws in greys)
+  const toHS = rgb => { const [r, gg, b] = rgb.split(',').map(v => v / 255), mx = Math.max(r, gg, b), mn = Math.min(r, gg, b), l = (mx + mn) / 2, d = mx - mn;
+    return { h: hueOf(rgb), s: d ? Math.round((d / (1 - Math.abs(2 * l - 1))) * 100) : 0 }; };
   const refresh = i => {
     el.querySelector('.viz-t b').textContent = i.title || '';
     el.querySelector('.viz-t span').textContent = i.artist || '';
-    cols = i.palette?.length ? i.palette : ['170,190,255'];
+    pal = i.palette?.length ? i.palette.map(toHS) : null;
   };
 
   // log-spaced bands of the spectrum, 0..1 (the highs tilted up so the whole range moves)
@@ -84,16 +87,17 @@ export function openVisualizer(host, audio, info, { icon, haptic = () => {}, onC
     return out;
   };
 
+  let peakB = 0.2, peakL = 0.2, pulse = 0, lastBeat = null;
   let bassS = 0, t = 0, last = performance.now(), avgBass = 0, kick = 0, raf = 0, closed = false, scene = null;
   // the camera: it turns slowly round the scene (faster when it's loud; kicks nudge it)
   const cam = { ax: 0.4, ay: -0.3, az: 0, vx: 0, vy: 0, vz: 0 };
   const sparks = [], blob = { x: 0, y: 0, vx: 0, vy: 0 };
   const newScene = () => {
     const kinds = Object.keys(SCENES).filter(k => k !== scene?.kind), kind = pick(kinds);
-    scene = { kind, ...SCENES[kind](), until: performance.now() / 1000 + rnd(6, 11), // a new scene every 6–11 seconds (real time)
-      hue: rnd(0, 360), dir: rnd(0, Math.PI * 2),
+    scene = { kind, ...SCENES[kind](), kicks: 0, born: performance.now() / 1000, hue: rnd(0, 360), dir: rnd(0, Math.PI * 2),
       spokes: Math.floor(rnd(18, 48)), skip: Math.floor(rnd(2, 11)), pts: Math.floor(rnd(30, 70)), arms: Math.floor(rnd(5, 12)),
       cols2: Math.floor(rnd(2, 4)), lines: Math.floor(rnd(10, 22)) };
+    el.dataset.scene = kind; // (handy for checking what's showing)
     cam.vx = rnd(-0.12, 0.12); cam.vy = rnd(-0.15, 0.15); cam.vz = rnd(-0.06, 0.06);
   };
   cv.onclick = () => { newScene(); haptic(); };
@@ -102,38 +106,59 @@ export function openVisualizer(host, audio, info, { icon, haptic = () => {}, onC
     if (closed) return;
     raf = requestAnimationFrame(frame);
     const i = info(), key = `${i.title}|${i.palette}`;
+    const bpm = i.bpm >= 50 && i.bpm <= 220 ? i.bpm : 0;
     if (key !== lastInfo) { lastInfo = key; refresh(i); }
     an.getByteFrequencyData(freq);
     an.getByteTimeDomainData(wave);
     const now = performance.now(), dt = Math.min(0.1, (now - last) / 1000), clock = now / 1000; last = now; t += dt;
+    // loudness and bass, each against its own recent peak, so quiet songs move it as much as loud ones
     let bass = 0; for (let j = 1; j < 12; j++) bass += freq[j]; bass /= 11 * 255;
-    bassS += (bass - bassS) * (bass > bassS ? 0.5 : 0.08);
-    avgBass += (bass - avgBass) * 0.02;
-    kick = Math.max(0, kick - dt * 3);
-    if (bass > 0.3 && bass > avgBass * 1.35 && kick < 0.4) kick = 1; // the bass jumping well above its recent average
     let level = 0; for (let j = 0; j < freq.length; j += 8) level += freq[j]; level /= (freq.length / 8) * 255;
-    if (!scene || clock > scene.until || (kick > 0.95 && clock > scene.until - 3)) newScene(); // a big kick near the end jumps early
-    const sc = scene, cx = W / 2, cy = H / 2, S = Math.min(W, H);
-    const hue = hueOf(cols[0]) + sc.hue + t * 14 + bassS * 60; // starts from the cover's colour and keeps drifting round
-    const hsl = (h, l = 60, a = 1) => `hsla(${((h % 360) + 360) % 360},95%,${l}%,${a})`;
+    peakB = Math.max(bass, peakB - dt * 0.04, 0.08); peakL = Math.max(level, peakL - dt * 0.03, 0.05);
+    bass = Math.min(1, bass / peakB); level = Math.min(1, level / peakL);
+    bassS += (bass - bassS) * (bass > bassS ? 0.6 : 0.1);
+    avgBass += (bass - avgBass) * 0.03;
+    kick = Math.max(0, kick - dt * 3); pulse = Math.max(0, pulse - dt * 3.5);
+    if (bass > 0.6 && bass > avgBass * 1.25 && kick < 0.4) { kick = 1; if (scene) scene.kicks++; } // the bass jumping above its recent average
+    // the metronome: the song's own BPM, counted from where the song is, so it stays on the beat after seeking.
+    // Each beat punches everything; every 8 beats it's the next scene.
+    if (!scene) newScene();
+    if (bpm && !audio.paused) {
+      const n = Math.floor((audio.currentTime * bpm) / 60);
+      if (n !== lastBeat) {
+        if (lastBeat !== null) { pulse = 1; kick = 1; if (Math.floor(n / 8) !== Math.floor(lastBeat / 8)) newScene(); }
+        lastBeat = n;
+      }
+    } else if (scene.kicks >= 8 || clock - scene.born > 20) newScene(); // no BPM saved for this song: every 8 kicks (or 20 s)
+    const sc = scene, cx = W / 2, cy = H / 2, S = Math.min(W, H) * (0.9 + pulse * 0.14 + level * 0.12);
+    const hue = sc.hue + t * 6 + bassS * 50; // which of the cover's colours, drifting slowly between them
+    // a colour from the cover's palette: h picks a point along it (blending neighbouring colours), l is lightness
+    const hsl = (h, l = 60, a = 1) => {
+      const L = Math.min(92, l + pulse * 18);
+      if (!pal) return `hsla(0,0%,${L}%,${a})`;
+      const n = pal.length, q = ((((h % 360) + 360) % 360) / 360) * n, k = Math.floor(q) % n, f = q - Math.floor(q), A = pal[k], B = pal[(k + 1) % n];
+      let dh = B.h - A.h; if (dh > 180) dh -= 360; if (dh < -180) dh += 360;
+      return `hsla(${(A.h + dh * f + 360) % 360},${Math.max(45, A.s + (B.s - A.s) * f)}%,${L}%,${a})`;
+    };
 
     // the last frame, carried over: moved, blurred, colour-shifted and a bit darker
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     g.globalCompositeOperation = 'source-over';
     bg.setTransform(1, 0, 0, 1, 0, 0); bg.globalCompositeOperation = 'copy'; bg.drawImage(cv, 0, 0);
-    g.fillStyle = sc.bgc; g.fillRect(0, 0, W, H);
+    g.fillStyle = pal ? `hsl(${pal[0].h},${Math.round(pal[0].s * 0.5)}%,4%)` : sc.bgc; g.fillRect(0, 0, W, H); // the darkest of the cover's colour
     sc.dir += dt * 0.2 * Math.sin(t * 0.13);
-    const push = sc.drift * S * (0.0045 + level * 0.006), zoom = sc.zoom + bassS * 0.015 + kick * 0.015;
+    const push = sc.drift * S * (0.0045 + level * 0.006), zoom = sc.zoom + bassS * 0.02 + pulse * 0.035;
     g.save(); g.translate(cx + Math.cos(sc.dir) * push, cy + Math.sin(sc.dir) * push); g.rotate(sc.rot * (1 + level)); g.scale(zoom, zoom); g.translate(-cx, -cy);
     g.globalAlpha = sc.alpha;
     g.drawImage(buf, 0, 0, W, H);
     g.restore(); g.globalAlpha = 1;
     g.globalCompositeOperation = 'lighter';
+    if (pulse > 0) { g.fillStyle = hsl(hue + 90, 45, pulse * 0.1); g.fillRect(0, 0, W, H); } // a soft flash on each beat
 
     // the camera, and 3D → screen
     const sp = 1 + level * 2.5 + kick * 3;
     cam.ax += cam.vx * dt * sp; cam.ay += cam.vy * dt * sp; cam.az += cam.vz * dt * sp;
-    if (kick > 0.95) { cam.vx += rnd(-0.2, 0.2); cam.vy += rnd(-0.2, 0.2); }
+    if (kick > 0.95) { cam.vx += rnd(-0.25, 0.25); cam.vy += rnd(-0.25, 0.25); cam.vz += rnd(-0.1, 0.1); }
     cam.vx *= 0.995; cam.vy *= 0.995;
     const [sx, cxr, sy, cyr, sz, czr] = [Math.sin(cam.ax), Math.cos(cam.ax), Math.sin(cam.ay), Math.cos(cam.ay), Math.sin(cam.az), Math.cos(cam.az)];
     const proj = (x, y, z) => {

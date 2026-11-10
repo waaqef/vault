@@ -5,7 +5,7 @@ import { decodeAudio, bpmKeyOf, parseName, trackInfo, readTags, cleanTitle, lead
 import { peaksOf, waveSvg } from './wave.js';
 import { makeZip, safeName } from './zip.js';
 
-const APP_VERSION = '[vault] v3.9.1'; // shown in Settings and sent with bug reports
+const APP_VERSION = '[vault] v3.10'; // shown in Settings and sent with bug reports
 // ---- helpers ------------------------------------------------------------------
 const $ = (s, el = document) => el.querySelector(s);
 function h(tag, attrs = {}, ...kids) {
@@ -2374,7 +2374,7 @@ async function showVisualizer() {
   if (!fp || fp.viz) return;
   const { openVisualizer } = await import('./visualizer.js');
   const d = fp.d;
-  const info = () => ({ title: cur?.name, artist: cur?.artist, cover: cur && coverOf(cur) ? coverUrl(coverOf(cur)) : null, palette: cur && coverOf(cur) ? paletteNow(coverOf(cur)) : null });
+  const info = () => ({ title: cur?.name, artist: cur?.artist, bpm: cur?.bpm, cover: cur && coverOf(cur) ? coverUrl(coverOf(cur)) : null, palette: cur && coverOf(cur) ? paletteNow(coverOf(cur)) : null });
   const onCancel = e => { e.preventDefault(); close(); };
   const close = openVisualizer(d, audio, info, { icon, haptic, onClose() { d.removeEventListener('cancel', onCancel); if (fp?.d === d) fp.viz = null; } });
   d.addEventListener('cancel', onCancel);
