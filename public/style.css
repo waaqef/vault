@@ -1129,6 +1129,7 @@ html { touch-action: manipulation; }
 
 /* a song downloading before it plays (first play on this device) */
 body.audio-loading #player .play { position: relative; }
+body.audio-loading #player .play::after { animation: spin .9s linear infinite; }
 body.audio-loading #player .play::after { content: ""; position: absolute; inset: -4px; border-radius: 50%;
   background: conic-gradient(var(--user-accent) var(--load, 0%), transparent 0); -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 0); mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 0); }
 

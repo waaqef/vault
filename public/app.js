@@ -1868,14 +1868,10 @@ async function playAt(i, { remember = true } = {}) {
   // iPhones only let audio start from a tap; start a moment of silence now so the real song can begin after downloading
   if (!audioUnlocked) { audio.src = SILENT; audio.play().then(() => { audioUnlocked = true; }, () => {}); }
   renderPlayer(); markPlaying();
-  let blob = await fromDevice(t).catch(() => null);
-  // Not on this device yet: download it once and keep it. (In the background, e.g. the screen is locked, stream instead.)
-  if (!blob && settings.keepPlayed && S.online && !document.hidden) {
-    document.body.classList.add('audio-loading');
-    try { blob = await fetchAudio(t, p => document.body.style.setProperty('--load', Math.round(p * 100) + '%')); }
-    catch (e) { if (my === playToken) { document.body.classList.remove('audio-loading'); if (!e.shown) toast(e.message, e.quiet ? { quiet: true, ms: 5000 } : { error: true, ms: 12000 }); } return; }
-    if (my === playToken) document.body.classList.remove('audio-loading');
-  }
+  const blob = await fromDevice(t).catch(() => null);
+  // Not on this device yet: it starts playing straight away (streamed). Once it's clearly being listened to (not
+  // skipped past), a copy is saved in the background, so next time it plays from this device.
+  if (!blob && settings.keepPlayed && S.online) setTimeout(() => { if (cur === t && S.online) fetchAudio(t).catch(() => {}); }, 8000);
   if (my !== playToken) return; // something else was picked while this loaded
   audio.src = blob ? (blobUrl = URL.createObjectURL(blob)) : `/api/audio/${t.id}?k=${encodeURIComponent(t.file_key)}`; // file key in the URL so a saved edit isn't served from the cached redirect
   audio.loop = P.repeat === 'one';
@@ -2042,6 +2038,9 @@ function startFade(secs) {
   })();
 }
 
+// A spinning ring round the play button while a song is still starting or has stalled.
+for (const ev of ['loadstart', 'waiting']) audio.addEventListener(ev, () => { if (realSrc()) { document.body.style.setProperty('--load', '28%'); document.body.classList.add('audio-loading'); } });
+for (const ev of ['playing', 'canplay', 'error', 'emptied']) audio.addEventListener(ev, () => document.body.classList.remove('audio-loading'));
 const realSrc = () => !audio.currentSrc.startsWith('data:'); // not the moment of silence used to unlock iPhone audio
 audio.onended = () => { if (!realSrc()) return; if (P.userQ.length || settings.autoplay || P.repeat === 'all') advance(); };
 audio.onerror = async () => {
@@ -2526,7 +2525,7 @@ async function settingsDialog(only) {
         h('button', { className: 'btn danger', onclick: () => { d.close(); deleteAccountDialog(); } }, 'Delete'))),
     !only && h('div', { className: 'set-sec' }, h('h3', {}, '[support]'),
       row('Support [vault]', 'Free, no ads. Tips help keep it that way.', h('a', { className: 'btn', href: 'https://ko-fi.com/choseroxy', target: '_blank', rel: 'noopener' }, 'Tip ☕'))),
-    h('div', { className: 'btns' }, h('span', { className: 'mono', style: { marginRight: 'auto', color: 'var(--fg-3)', alignSelf: 'center' } }, '[vault] v2.4.2'),
+    h('div', { className: 'btns' }, h('span', { className: 'mono', style: { marginRight: 'auto', color: 'var(--fg-3)', alignSelf: 'center' } }, '[vault] v2.4.3'),
       h('button', { className: 'btn primary', onclick: () => d.close() }, 'Done'))), { className: 'settings-dlg' });
   if (only) d.querySelectorAll('.set-sec').forEach(sec => sec.querySelector('h3').textContent !== `[${only}]` && sec.remove());
   api('/versions/old').then(({ count, size }) => {
