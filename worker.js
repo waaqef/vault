@@ -877,6 +877,57 @@ on('GET', '/api/drive/connect', async (req, env, b, p, url, ctx, u) => {
   const state = `${u.id}.${exp}.${await hmac(env.APP_PASSWORD, `drive-state:${u.id}:${exp}`)}`;
   return Response.redirect(drive.authUrl(env.GOOGLE_CLIENT_ID, driveRedirect(url), state), 302);
 });
+// ---- moving an account's Backblaze files into its Google Drive ----
+// One file per call (the app keeps calling until none are left), so each call stays well inside the Worker's limits
+// and it can stop and pick up again at any point (e.g. at Backblaze's daily limit). Each file is copied, checked, and
+// only then is every row that points at it switched to the Drive copy. The Backblaze copy is left in place.
+const B2_KEYS = `SELECT k FROM (
+  SELECT v.file_key AS k FROM track_versions v JOIN tracks t ON t.id = v.track_id JOIN projects p ON p.id = t.project_id WHERE p.owner_id = ?1
+  UNION SELECT t.file_key FROM tracks t JOIN projects p ON p.id = t.project_id WHERE p.owner_id = ?1
+  UNION SELECT t.cover FROM tracks t JOIN projects p ON p.id = t.project_id WHERE p.owner_id = ?1
+  UNION SELECT cover FROM projects WHERE owner_id = ?1
+) WHERE k IS NOT NULL AND k NOT LIKE 'drive:%'`;
+on('GET', '/api/move-to-drive', async (req, env, b, p, url, ctx, u) =>
+  json({ left: (await env.DB.prepare(`SELECT COUNT(*) AS n FROM (${B2_KEYS})`).bind(u.id).first()).n, ready: usesDrive(env, u) && !!u.drive_refresh }));
+on('POST', '/api/move-to-drive', async (req, env, b, p, url, ctx, u) => {
+  if (!usesDrive(env, u) || !u.drive_refresh) return fail('Connect Google Drive first (Settings → Account → Google Drive).', 409);
+  const row = await env.DB.prepare(`${B2_KEYS} LIMIT 1`).bind(u.id).first();
+  if (!row) return json({ left: 0 });
+  const key = row.k, kind = key.startsWith('cover/') ? 'cover' : 'audio';
+  const src = await s3(env).fetch(objUrl(env, key));
+  if (src.status === 404) { // gone from Backblaze already: nothing to copy, so it can't be moved
+    return fail(`A file is missing from Backblaze (${key}). Nothing was changed.`, 404);
+  }
+  if (!src.ok) {
+    const body = await src.text(), msg = (body.match(/<Message>([^<]*)<\/Message>/) || [])[1] || '';
+    if (src.status === 403 && /cap|limit/i.test(body)) return fail("Backblaze's daily limit is reached. It resets at midnight UTC (7pm EST); press Move again after that and it carries on.", 429);
+    return fail(`Backblaze said ${src.status}${msg ? `: ${msg}` : ''}`, 502);
+  }
+  const size = Number(src.headers.get('content-length'));
+  const s = await space(env, u);
+  if (s.usage + size > s.limit) { src.body?.cancel(); return fail('Your Google Drive is full. Free up space there, then press Move again.', 507); }
+  const named = kind === 'audio' && await env.DB.prepare('SELECT t.name FROM track_versions v JOIN tracks t ON t.id = v.track_id WHERE v.file_key = ? LIMIT 1').bind(key).first();
+  const type = src.headers.get('content-type') || contentType(key) || 'application/octet-stream';
+  const name = named ? `${String(named.name).slice(0, 180)}.${key.split('.').pop()}` : key.split('/').pop();
+  const session = await drive.uploadSession(env, u, { name, type, size });
+  const { readable, writable } = new FixedLengthStream(size);
+  src.body.pipeTo(writable).catch(() => {});
+  const put = await fetch(session, { method: 'PUT', body: readable, headers: { 'content-type': type, 'content-length': String(size) } });
+  if (!put.ok) return fail(`Google Drive refused the file (${put.status}). Nothing was changed; press Move to try again.`, 502);
+  const made = await put.json();
+  const newKey = `drive:${kind}:${made.id}`;
+  if (Number(made.size) !== size || !drive.DRIVE_KEY_RE.test(newKey)) {
+    await drive.deleteFile(env, u, newKey).catch(() => {});
+    return fail('The copy in Google Drive came out the wrong size. Nothing was changed; press Move to try again.', 502);
+  }
+  await env.DB.batch([
+    env.DB.prepare('UPDATE track_versions SET file_key = ? WHERE file_key = ?').bind(newKey, key),
+    env.DB.prepare('UPDATE tracks SET file_key = ? WHERE file_key = ?').bind(newKey, key),
+    env.DB.prepare('UPDATE tracks SET cover = ? WHERE cover = ?').bind(newKey, key),
+    env.DB.prepare('UPDATE projects SET cover = ? WHERE cover = ?').bind(newKey, key),
+  ]);
+  return json({ moved: key, left: (await env.DB.prepare(`SELECT COUNT(*) AS n FROM (${B2_KEYS})`).bind(u.id).first()).n });
+});
 // Google sends you back here after you allow access.
 // The account comes from the signed state, not the login cookie, so this also works when the iPhone app hands Google's
 // sign-in to Safari (where you aren't logged in): Safari then just says to go back to the app.

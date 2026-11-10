@@ -5,7 +5,7 @@ import { decodeAudio, bpmKeyOf, parseName, trackInfo, readTags, cleanTitle, lead
 import { peaksOf, waveSvg } from './wave.js';
 import { makeZip, safeName } from './zip.js';
 
-const APP_VERSION = '[vault] v3.5.1'; // shown in Settings and sent with bug reports
+const APP_VERSION = '[vault] v3.6'; // shown in Settings and sent with bug reports
 // ---- helpers ------------------------------------------------------------------
 const $ = (s, el = document) => el.querySelector(s);
 function h(tag, attrs = {}, ...kids) {
@@ -2709,6 +2709,7 @@ async function settingsDialog(only) {
       row('Old versions', oldInfo, oldBtn),
       row('Downloads on this device', local, clearBtn),
       row('Back up everything', 'Copies every project, cover and note into a folder on this computer', h('button', { className: 'btn', onclick: () => { d.close(); backupAll(); } }, 'Back up')),
+      S.me?.owner && row('Move to Google Drive', 'Copies your files from Backblaze into your Google Drive, one at a time. You can stop and carry on any time.', h('button', { className: 'btn', onclick: () => { d.close(); moveToDrive(); } }, 'Move')),
       row('Tidy up track info', 'Takes track numbers off names (the order stays), moves “prod. X” into a tag, and fills in artists from the files', h('button', { className: 'btn', onclick: () => { d.close(); tidyTracks(); } }, 'Tidy up'))),
     // The share-sheet Shortcut is for the web app; hidden inside the sideloaded iPhone app.
     !nativeHaptics && h('div', { className: 'set-sec' }, h('h3', {}, '[iphone web app]'),
@@ -3337,6 +3338,28 @@ async function zipTracks(list, name, cover) {
   note.remove();
 }
 // Writes the whole library into a folder you pick (folders → projects → files). Chrome/Edge on a computer.
+// Moves the files still on Backblaze into Google Drive, one per request, until none are left (or something stops it).
+async function moveToDrive() {
+  let st;
+  try { st = await api('/move-to-drive'); } catch (e) { return oops(e); }
+  if (!st.ready) return toast('Connect Google Drive first: Settings → Account → Google Drive → Connect.', { ms: 8000 });
+  if (!st.left) return toast('Everything is already in Google Drive.');
+  if (!(await confirm('Move to Google Drive?', `${st.left} files (songs, every version, and covers) get copied into your Google Drive. Keep this tab open while it runs; if it stops, press Move again and it carries on where it left off. The copies on Backblaze aren't deleted.`, 'Move'))) return;
+  const total = st.left, note = toast('', { ms: 0 });
+  let left = total;
+  try {
+    while (left > 0) {
+      note.textContent = `Moving to Google Drive: ${total - left + 1} of ${total}… (keep this tab open)`;
+      left = (await api('/move-to-drive', { method: 'POST' })).left;
+    }
+    note.remove();
+    toast(`Done: all ${total} files are in Google Drive.`, { ms: 8000 });
+  } catch (e) {
+    note.remove();
+    toast(`${e.message} (${total - left} of ${total} moved so far)`, { error: true, ms: 15000 });
+  }
+  load();
+}
 // A stored file read like a local one (only the parts asked for are fetched), so readTags works on it.
 const remoteFile = t => ({
   size: t.size,
