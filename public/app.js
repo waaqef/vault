@@ -217,7 +217,12 @@ function driveBack() {
 
 function showLogin() {
   if ($('#login')) return;
-  $('.empty.boot')?.remove(); // nothing is loading behind the sign-in box
+  // Signed out (or the account was deleted): nothing from the last account may show behind the sign-in box,
+  // so the library saved on this device and its songs are forgotten, and the page behind is emptied.
+  forgetDevice();
+  Object.assign(S, { folders: [], projects: [], tracks: [], sharedProjects: [], sharedTracks: [], me: null, trash: 0, unread: 0 });
+  fill($('#side')); fill($('#main')); tintFrom(null);
+  if (cur) { audio.pause(); audio.removeAttribute('src'); cur = null; queue = []; renderPlayer(); }
   const box = h('div', { id: 'login', className: 'login' });
   const d = dialog(box, { locked: true });
   const head = h('div', { className: 'disc', style: { width: '56px', height: '56px', justifySelf: 'center', animation: 'spin 14s linear infinite' } });
@@ -293,10 +298,15 @@ function paintAvatar(el, src, name = '') {
 const nameOf = u => u?.displayName || u?.display_name || u?.username || '';
 const avatarEl = (me, cls = 'avatar') => { const a = h('span', { className: cls }); paintAvatar(a, me?.avatar, nameOf(me)); return a; };
 // Logging out also forgets this account's songs kept on the device, so the next person doesn't get them.
+// What this device keeps of an account: the saved library, downloads and kept songs.
+function forgetDevice() {
+  try { ['tree', 'offline', 'view', 'played', 'recent'].forEach(k => localStorage.removeItem(k)); } catch {}
+  S.offline = new Set();
+  return Promise.all(['audio', 'played'].map(c => caches.delete(c).catch(() => {})));
+}
 async function logout() {
   await fetch('/api/logout').catch(() => {});
-  try { ['tree', 'offline', 'view', 'played', 'recent'].forEach(k => localStorage.removeItem(k)); } catch {}
-  await Promise.all(['audio', 'played'].map(c => caches.delete(c).catch(() => {})));
+  await forgetDevice();
   location.replace('/login');
 }
 
@@ -2504,7 +2514,7 @@ async function settingsDialog(only) {
         h('button', { className: 'btn danger', onclick: () => { d.close(); deleteAccountDialog(); } }, 'Delete'))),
     !only && h('div', { className: 'set-sec' }, h('h3', {}, '[support]'),
       row('Support [vault]', 'Free, no ads. Tips help keep it that way.', h('a', { className: 'btn', href: 'https://ko-fi.com/choseroxy', target: '_blank', rel: 'noopener' }, 'Tip ☕'))),
-    h('div', { className: 'btns' }, h('span', { className: 'mono', style: { marginRight: 'auto', color: 'var(--fg-3)', alignSelf: 'center' } }, '[vault] v2.5.2'),
+    h('div', { className: 'btns' }, h('span', { className: 'mono', style: { marginRight: 'auto', color: 'var(--fg-3)', alignSelf: 'center' } }, '[vault] v2.5.3'),
       h('button', { className: 'btn primary', onclick: () => d.close() }, 'Done'))), { className: 'settings-dlg' });
   if (only) d.querySelectorAll('.set-sec').forEach(sec => sec.querySelector('h3').textContent !== `[${only}]` && sec.remove());
   api('/versions/old').then(({ count, size }) => {
