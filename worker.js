@@ -428,6 +428,7 @@ function cleanTrack(b) {
   if ('position' in b) { b.position = numOrNull(b.position, -1e9, 1e9); if (b.position === null) delete b.position; }
   if ('peaks' in b) b.peaks = peaksOrNull(b.peaks);
   if ('mark' in b) b.mark = ['star', 'throw'].includes(b.mark) ? b.mark : null; // favourite / throwaway
+  if ('disc' in b) { b.disc = numOrNull(b.disc, 1, 99); if (b.disc !== null) b.disc = Math.round(b.disc); } // disc of an album
   return b;
 }
 async function createTrack(env, b, size) {
@@ -435,8 +436,8 @@ async function createTrack(env, b, size) {
   const id = uid(), t = now();
   const pos = (await env.DB.prepare('SELECT COALESCE(MAX(position), -1) + 1 AS p FROM tracks WHERE project_id = ?').bind(b.project_id).first()).p;
   await env.DB.batch([
-    env.DB.prepare('INSERT INTO tracks (id, project_id, name, file_key, size, duration, bpm, musical_key, tags, artist, peaks, position, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .bind(id, b.project_id, cleanName(b.name, 300) || 'Untitled', b.file_key, size, b.duration || null, b.bpm || null, b.musical_key || null, b.tags || '', b.artist || '', b.peaks || null, pos, t),
+    env.DB.prepare('INSERT INTO tracks (id, project_id, name, file_key, size, duration, bpm, musical_key, tags, artist, peaks, position, disc, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind(id, b.project_id, cleanName(b.name, 300) || 'Untitled', b.file_key, size, b.duration || null, b.bpm || null, b.musical_key || null, b.tags || '', b.artist || '', b.peaks || null, pos, b.disc ?? null, t),
     env.DB.prepare('INSERT INTO track_versions (id, track_id, file_key, size, duration, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
       .bind(uid(), id, b.file_key, size, b.duration || null, 'Original', t),
   ]);
@@ -450,7 +451,7 @@ on('POST', '/api/tracks', async (req, env, b, p, url, ctx, u) => {
   await logActivity(env, proj.id, u, `added “${cleanName(b.name, 120) || 'Untitled'}”`);
   return json({ id });
 });
-const TRACK_FIELDS = ['name', 'project_id', 'bpm', 'musical_key', 'tags', 'cover', 'position', 'notes', 'artist', 'duration', 'peaks', 'mark'];
+const TRACK_FIELDS = ['name', 'project_id', 'bpm', 'musical_key', 'tags', 'cover', 'position', 'notes', 'artist', 'duration', 'peaks', 'mark', 'disc'];
 on('PATCH', '/api/tracks/:id', async (req, env, b, { id }, url, ctx, u) => {
   const old = await editTrack(env, u, id);
   if (!old) return fail('Not found', 404);

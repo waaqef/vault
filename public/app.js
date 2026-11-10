@@ -5,7 +5,7 @@ import { decodeAudio, bpmKeyOf, parseName, trackInfo, readTags, cleanTitle, lead
 import { peaksOf, waveSvg } from './wave.js';
 import { makeZip, safeName } from './zip.js';
 
-const APP_VERSION = '[vault] v3.4'; // shown in Settings and sent with bug reports
+const APP_VERSION = '[vault] v3.5'; // shown in Settings and sent with bug reports
 // ---- helpers ------------------------------------------------------------------
 const $ = (s, el = document) => el.querySelector(s);
 function h(tag, attrs = {}, ...kids) {
@@ -472,7 +472,7 @@ function visibleTracks() {
   if (f.star) list = list.filter(t => t.mark === 'star');
   if (f.added) list = list.filter(t => t.created_at > Date.now() - f.added * 864e5);
   const by = {
-    manual: (a, b) => a.position - b.position,
+    manual: (a, b) => (S.view.type === 'project' ? (a.disc || 1) - (b.disc || 1) : 0) || a.position - b.position,
     newest: (a, b) => b.created_at - a.created_at,
     oldest: (a, b) => a.created_at - b.created_at,
     name: (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }),
@@ -812,9 +812,12 @@ function renderList(animate = false) {
     return;
   }
   let dragId = null;
+  // An album on more than one disc gets a [disc N] heading before each disc (in the project's own order).
+  const discs = p && manual && new Set(list.map(t => t.disc || 1)).size > 1;
+  const discHead = (t, i) => discs && (i === 0 || (list[i - 1].disc || 1) !== (t.disc || 1)) ? h('div', { className: 'disc-head mono' }, `[disc ${t.disc || 1}]`) : null;
   fill(box, searchChips(),
     h('div', { className: 'trow thead' }, h('span'), h('span', {}, '[title]'), h('span', { className: 'c-wave' }), h('span', { className: 'cell c-bpm' }, '[bpm]'), h('span', { className: 'cell c-key' }, '[key]'), h('span', { className: 'cell' }, '[time]'), h('span'), h('span'), h('span')),
-    list.map((t, i) => h('div', {
+    list.flatMap((t, i) => [discHead(t, i), h('div', {
       className: 'trow' + (cur?.id === t.id ? ' on' : '') + (S.select?.has(t.id) ? ' selected' : '') + (t.mark === 'throw' ? ' throw' : '') + (justMarked?.id === t.id && justMarked.mark === 'throw' ? ' just-throw' : ''),
       draggable: !S.arrange && !S.select && !isShared(t.project_id), 'data-id': t.id, style: { '--i': i },
       'aria-selected': S.select ? String(S.select.has(t.id)) : null,
@@ -885,7 +888,7 @@ function renderList(animate = false) {
             reorder(ids).then(() => document.querySelector(`.trow[data-id="${t.id}"] .grip`)?.focus());
           } }, icon('grip', 18))
       : S.select ? h('span')
-        : h('button', { className: 'icon-btn', 'aria-label': 'Track options', onclick(e) { e.stopPropagation(); trackMenu(t, list); } }, icon('more', 18)))),
+        : h('button', { className: 'icon-btn', 'aria-label': 'Track options', onclick(e) { e.stopPropagation(); trackMenu(t, list); } }, icon('more', 18)))]),
   );
   marquees(box);
 }
@@ -1279,7 +1282,7 @@ async function uploadTracks(files, project_id, folder = projectOf(project_id)?.n
   const numbered = leadNumbers(files.map(f => f.name));
   const infos = await Promise.all(files.map(f => (kindOf(f.name) === 'audio' ? trackInfo(f, numbered).catch(() => null) : null)));
   const order = files.map((file, i) => ({ file, info: infos[i], i }));
-  if (order.filter(x => x.info?.track != null).length > 1) order.sort((a, b) => (a.info?.track ?? 1e9) - (b.info?.track ?? 1e9) || a.i - b.i);
+  if (order.filter(x => x.info?.track != null).length > 1) order.sort((a, b) => (a.info?.disc ?? 1) - (b.info?.disc ?? 1) || (a.info?.track ?? 1e9) - (b.info?.track ?? 1e9) || a.i - b.i);
   const seen = new Map(S.tracks.map(t => [`${t.name.toLowerCase()}|${t.size}`, projectOf(t.project_id)?.name || 'your library']));
   for (const j of Q.jobs) if (j.status !== 'skipped') seen.set(`${(j.info?.title || baseName(j.file.name)).toLowerCase()}|${j.size}`, j.folder || 'this upload');
   const jobs = order.map(({ file, info }) => {
@@ -1313,7 +1316,7 @@ async function pump() {
       job.phase = 'Saving'; drawQueue();
       const info = job.info || {};
       await api('/tracks', { method: 'POST', body: { project_id: job.project_id, name: info.title || baseName(job.file.name), file_key, duration, bpm, musical_key: key, peaks,
-        artist: info.artist || settings.artist, tags: info.prod ? `prod. ${info.prod}` : '' } });
+        artist: info.artist || settings.artist, tags: info.prod ? `prod. ${info.prod}` : '', disc: info.disc || null } });
       job.status = 'done';
       Q.refresh ||= setTimeout(() => { Q.refresh = 0; load(); }, 2500); // refresh the library every few seconds, not after every file
     } catch (e) {
@@ -1832,6 +1835,7 @@ async function detailsDialog(t) {
   const name = h('input', { type: 'text', value: t.name, required: true, maxLength: 300 });
   const artist = h('input', { type: 'text', value: t.artist || '', placeholder: settings.artist || 'Who made it', maxLength: 120 });
   const bpm = h('input', { type: 'number', min: 20, max: 400, step: 0.1, value: t.bpm ?? '', placeholder: '—' });
+  const disc = h('input', { type: 'number', min: 1, max: 99, step: 1, value: t.disc ?? '', placeholder: '1' });
   const key = h('select', {}, h('option', { value: '' }, '—'), KEYS.map(k => h('option', { value: k, selected: t.musical_key === k }, k)));
   const tags = h('input', { type: 'text', value: t.tags || '', placeholder: 'dark, trap, sent to Mike', maxLength: 500 });
   const own = !isShared(t.project_id); // a shared track stays in its project
@@ -1844,7 +1848,7 @@ async function detailsDialog(t) {
       e.preventDefault();
       try {
         await api(`/tracks/${t.id}`, { method: 'PATCH', body: {
-          name: name.value.trim(), artist: artist.value.trim(), bpm: bpm.value ? +bpm.value : null, musical_key: key.value || null,
+          name: name.value.trim(), artist: artist.value.trim(), bpm: bpm.value ? +bpm.value : null, musical_key: key.value || null, disc: disc.value ? +disc.value : null,
           tags: tags.value.split(',').map(s => s.trim()).filter(Boolean).join(', '), notes: notes.value, ...(own ? { project_id: proj.value } : {}),
         } });
       } catch (x) { return oops(x); }
@@ -1855,7 +1859,7 @@ async function detailsDialog(t) {
   h('label', {}, 'Name', name),
   h('label', {}, 'Producer / artist', artist),
   h('div', { className: 'row2' }, h('label', {}, 'BPM', bpm), h('label', {}, 'Key', key)),
-  h('label', {}, 'Tags (comma separated)', tags),
+  h('div', { className: 'row2' }, h('label', {}, 'Tags (comma separated)', tags), h('label', { className: 'disc-l' }, 'Disc', disc)),
   own && h('label', {}, 'Project', proj),
   h('label', {}, 'Notes', notes),
   h('div', { className: 'btns', style: { justifyContent: 'flex-start' } },
@@ -3348,7 +3352,7 @@ const remoteFile = t => ({
 async function tidyTracks() {
   const mine = new Set(S.projects.map(p => p.id)), tracks = S.tracks.filter(t => mine.has(t.project_id));
   if (!tracks.length) return toast('No tracks to tidy yet.');
-  if (!(await confirm('Tidy up track info?', `Goes through your ${tracks.length} tracks. Names lose their track numbers (“01 Song” → “Song”, same order) and any “prod. X” (it becomes a tag), and the producer / artist is filled in from each file's own info where it has one.`, 'Tidy up'))) return;
+  if (!(await confirm('Tidy up track info?', `Goes through your ${tracks.length} tracks. Names lose their track numbers (“01 Song” → “Song”, same order) and any “prod. X” (it becomes a tag). The producer / artist and disc number are filled in from each file's own info where it has them (“1-01 Song” is disc 1).`, 'Tidy up'))) return;
   const nums = new Map([...mine].map(id => [id, leadNumbers(tracks.filter(t => t.project_id === id).map(t => t.name))]));
   const note = toast('', { ms: 0 });
   let done = 0, changed = 0, failed = 0;
@@ -3357,6 +3361,8 @@ async function tidyTracks() {
     const n = cleanTitle(t.name, tags.artist || t.artist, nums.get(t.project_id)), prod = n.prod || tags.producer, body = {};
     if (n.title !== t.name) body.name = n.title;
     if (tags.artist && !(t.artist || '').toLowerCase().includes(tags.artist.toLowerCase())) body.artist = tags.artist.slice(0, 120);
+    const disc = n.disc ?? tags.disc;
+    if (disc && disc !== t.disc) body.disc = disc;
     if (prod && !tagsOf(t).some(x => /^prod\./i.test(x))) body.tags = [...tagsOf(t), `prod. ${prod}`].join(', ');
     if (Object.keys(body).length) { await api(`/tracks/${t.id}`, { method: 'PATCH', body }); Object.assign(t, body); changed++; }
   };

@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS tracks (
   id TEXT PRIMARY KEY, project_id TEXT NOT NULL, name TEXT NOT NULL,
   file_key TEXT NOT NULL, size INTEGER NOT NULL, duration REAL,
   bpm REAL, musical_key TEXT, tags TEXT NOT NULL DEFAULT '', cover TEXT,
-  notes TEXT NOT NULL DEFAULT '', artist TEXT NOT NULL DEFAULT '', deleted_at INTEGER, peaks TEXT, mark TEXT,
+  notes TEXT NOT NULL DEFAULT '', artist TEXT NOT NULL DEFAULT '', deleted_at INTEGER, peaks TEXT, mark TEXT, disc INTEGER,
   position REAL NOT NULL DEFAULT 0, created_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS track_versions (

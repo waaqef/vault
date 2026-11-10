@@ -658,6 +658,9 @@ body.playing .uq { bottom: calc(92px + env(safe-area-inset-bottom)); }
 /* numbered rows inside a project */
 /* the project actions' icon buttons (Rearrange, Select, ⋯) */
 .hero .actions .act-ic { background: var(--fill-2); }
+/* [disc N] above each disc of a multi-disc album */
+.disc-head { padding: 18px 12px 6px; font-size: 11px; color: var(--fg-3); letter-spacing: .04em; border-bottom: 1px solid var(--line, rgba(255,255,255,.08)); }
+.disc-l input { width: 70px; }
 .tnum { position: relative; width: 44px; height: 40px; display: grid; place-items: center; color: var(--fg-3); font-size: 14px; }
 .tnum b { font-weight: 400; }
 .tnum .bars { background: none; }

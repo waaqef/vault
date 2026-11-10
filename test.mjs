@@ -194,7 +194,7 @@ console.log('zip ok');
     ['Product launch.mp3', '', { title: 'Product launch', track: null, prod: null }],
     ['05_bounce_v2 (prod. Che x CXO).wav', '', { title: 'bounce v2', track: 5, prod: 'Che x CXO' }],
   ];
-  for (const [name, artist, want] of cases) assert.deepEqual(parseTitle(name, artist), want, name);
+  for (const [name, artist, want] of cases) assert.deepEqual(parseTitle(name, artist), { disc: null, ...want }, name);
   // an MP3 with an ID3v2.3 tag: title, artist, track "2/9", a TXXX producer
   const frame = (id, text) => { const body = Buffer.concat([Buffer.from([3]), Buffer.from(text, 'utf8')]); const h = Buffer.alloc(10); h.write(id, 0); h.writeUInt32BE(body.length, 4); return Buffer.concat([h, body]); };
   const frames = Buffer.concat([frame('TIT2', 'Track 02'), frame('TPE1', 'Che'), frame('TRCK', '2/9'), frame('TXXX', 'PRODUCER\0CXO')]);
@@ -202,12 +202,13 @@ console.log('zip ok');
   const mp3 = new File([head, frames, Buffer.from([0xff, 0xfb, 0x90, 0x64])], 'Track 02.mp3');
   assert.deepEqual(await readTags(mp3), { title: 'Track 02', artist: 'Che', track: 2, producer: 'CXO' });
   const info = await trackInfo(new File([head, frames], '02 - 2sday.mp3'));
-  assert.deepEqual(info, { title: '2sday', artist: 'Che', prod: 'CXO', track: 2 }, 'the name wins for the title; tags fill in the rest');
+  assert.deepEqual(info, { title: '2sday', artist: 'Che', prod: 'CXO', track: 2, disc: null }, 'the name wins for the title; tags fill in the rest');
   // names already in the library (Settings → Tidy up): album numbers off, plain numbers that are part of a title kept
   const { cleanTitle, leadNumbers } = await import('./public/detect.js');
   const album = ['01 Haha', '09 Drone', '10 Summrsita', '1-01 KING OF ROCK', '2 Times', '223 (feat. SSGKobe)', '07 9 To 5', '0013 147 f major prod. 1ssixr', 'Attached__'];
   const nums = leadNumbers(album);
   assert.deepEqual(album.map(n => cleanTitle(n, '', nums).title), ['Haha', 'Drone', 'Summrsita', 'KING OF ROCK', '2 Times', '223 (feat. SSGKobe)', '9 To 5', '0013 147 f major', 'Attached__']);
   assert.equal(cleanTitle('02 MERSELESS prod. envyother +').prod, 'envyother');
+  assert.deepEqual([cleanTitle('2-03 ON FLEEK').disc, cleanTitle('2-03 ON FLEEK').track, cleanTitle('03 ON FLEEK').disc], [2, 3, null]);
   console.log('import info ok');
 }

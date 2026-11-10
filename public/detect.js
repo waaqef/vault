@@ -185,6 +185,7 @@ function id3(b) {
     if (id === 'TIT2') out.title = text(d);
     else if (id === 'TPE1') out.artist = text(d);
     else if (id === 'TRCK') out.track = parseInt(text(d)) || null;
+    else if (id === 'TPOS') out.disc = parseInt(text(d)) || null;
     else if (id === 'TXXX') { const [k, v] = text(d).split('\0'); if (/produc/i.test(k || '') && v) out.producer = v.trim(); }
   }
   return out;
@@ -201,6 +202,7 @@ function mp4Tags(b) {
       if (key === '©nam') out.title = utf8(v);
       else if (key === '©ART') out.artist = utf8(v);
       else if (key === 'trkn') out.track = ((v[2] << 8) | v[3]) || null;
+      else if (key === 'disk') out.disc = ((v[2] << 8) | v[3]) || null;
     }));
   });
   walk(0, b.length);
@@ -229,6 +231,7 @@ async function flac(file) {
         const at = kv.indexOf('='), key = kv.slice(0, at).toUpperCase(), v = kv.slice(at + 1).trim();
         if (key === 'TITLE') out.title = v; else if (key === 'ARTIST') out.artist = v;
         else if (key === 'TRACKNUMBER') out.track = parseInt(v) || null; else if (key === 'PRODUCER') out.producer = v;
+        else if (key === 'DISCNUMBER') out.disc = parseInt(v) || null;
       }
       return out;
     }
@@ -259,16 +262,16 @@ export const parseTitle = (raw, artist = '', numbered = null) =>
 export const leadNumbers = names => new Set(names.map(n => /^(?:\d-)?(\d{1,3})(?:\s|[._-])/.exec(String(n || ''))?.[1]).filter(Boolean).map(Number));
 export function cleanTitle(name, artist = '', numbered = null) {
   let s = String(name || '').replace(/\s+/g, ' ').trim();
-  let track = null, prod = null;
-  const n = s.match(/^(?:track\s*)?(?:\d-(?=\d\d\s))?[([]?(\d{1,3})[)\]]?(?:\s*[.\-–—:)]\s*|\s+)(?=\S)/i);
-  if (n && ((+n[1] >= 10 && [-3, -2, -1, 1].some(k => numbered?.has?.(+n[1] + k))) || /^0\d/.test(n[1]) || /[.\-–—:)\]]/.test(n[0]) || /^track/i.test(n[0]))) { track = +n[1]; s = s.slice(n[0].length); }
+  let track = null, prod = null, disc = null;
+  const n = s.match(/^(?:track\s*)?(?:(\d)-(?=\d\d\s))?[([]?(\d{1,3})[)\]]?(?:\s*[.\-–—:)]\s*|\s+)(?=\S)/i); // "1-01 Song": disc 1, track 1
+  if (n && ((+n[2] >= 10 && [-3, -2, -1, 1].some(k => numbered?.has?.(+n[2] + k))) || /^0\d/.test(n[2]) || /[.\-–—:)\]]/.test(n[0]) || /^track/i.test(n[0]))) { track = +n[2]; disc = n[1] ? +n[1] : null; s = s.slice(n[0].length); }
   const p = s.match(/\s*[([{]\s*(?:prod(?:uced)?\.?(?:\s*by)?)\s*[:.]?\s*([^)\]}]+)[)\]}]/i) || s.match(/\s+[-–—|]?\s*prod(?:uced)?\.?(?:\s*by)?[:.]?\s+(.+)$/i);
   if (p) { prod = p[1].replace(/[\s+&,-]+$/, '').trim() || null; s = (s.slice(0, p.index) + s.slice(p.index + p[0].length)).trim(); }
   if (artist) {
     const a = artist.toLowerCase(), low = s.toLowerCase();
     if (low.startsWith(a + ' - ')) s = s.slice(artist.length + 3); else if (low.endsWith(' - ' + a)) s = s.slice(0, -(artist.length + 3));
   }
-  return { title: s.trim() || String(name || ''), track, prod };
+  return { title: s.trim() || String(name || ''), track, prod, disc };
 }
 export async function trackInfo(file, numbered = null) {
   const tags = await readTags(file);
@@ -280,5 +283,6 @@ export async function trackInfo(file, numbered = null) {
     artist: tags.artist || '',
     prod: byName.prod || fromTag?.prod || tags.producer || '',
     track: byName.track ?? tags.track ?? fromTag?.track ?? null,
+    disc: byName.disc ?? tags.disc ?? null,
   };
 }
