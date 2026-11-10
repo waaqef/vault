@@ -19,9 +19,6 @@
   @keyframes wash-hue { from { filter: blur(50px) hue-rotate(0deg) saturate(1.3); } to { filter: blur(50px) hue-rotate(360deg) saturate(1.3); } }
   @media (prefers-reduced-motion: reduce) { .disc, body::before { animation: none; } }
   .acts { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: 22px; }
-  .acts a { display: inline-flex; align-items: center; height: 40px; padding: 0 20px; border-radius: 999px; font-weight: 600; font-size: 14px; text-decoration: none; }
-  .acts .primary { color: #111; background: linear-gradient(180deg, #fff, #d9d9d9); box-shadow: inset 0 1px 0 #fff, 0 8px 24px rgba(0,0,0,.35); }
-  .acts .ghost { color: var(--fg); background: rgba(255,255,255,.07); box-shadow: inset 0 1px 0 rgba(255,255,255,.12); }
 </style>
 </head><body>
 <nav class="glass" aria-label="Main"><a class="brand" href="/">[vault]</a><a class="lnk" href="/privacy">[privacy]</a><a class="lnk" href="/terms">[terms]</a><a class="btn" href="/login">Sign in</a></nav>
@@ -30,6 +27,6 @@
 <span class="label">[not found]</span>
 <div class="code">404</div>
 <p>This page doesn't exist, or it moved. If someone sent you a share link, it may have been turned off.</p>
-<div class="acts"><a class="primary" href="/library">Go to your library</a><a class="ghost" href="/about">Home page</a></div>
+<div class="acts"><a class="rbtn" href="/library"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 17.5V6l10-2v11.5"/><circle cx="6.5" cy="17.5" r="2.5"/><circle cx="16.5" cy="15.5" r="2.5"/></svg>Go to your library</a><a class="rbtn" href="/about"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10.5 12 4l8 6.5V19a1.5 1.5 0 0 1-1.5 1.5H15v-6h-6v6H5.5A1.5 1.5 0 0 1 4 19z"/></svg>Home page</a></div>
 </article></main>
 </body></html>

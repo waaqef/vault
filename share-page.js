@@ -24,8 +24,7 @@ h1{font-size:36px;font-weight:500;letter-spacing:-.045em;margin:6px 0;line-heigh
 .star{color:#ffcf45}.throw{display:inline-block;margin-right:6px;padding:0 6px;border-radius:5px;background:rgba(255,92,92,.16);color:#ff8a80;font:10px "Plex Mono",ui-monospace,monospace;line-height:16px;vertical-align:1px}
 .row.is-throw .tn{color:var(--fg2)}
 .top{display:flex;align-items:center;gap:10px;margin-bottom:44px}.top .brand{margin:0 auto 0 0}
-.top a.pill{display:inline-flex;align-items:center;height:34px;padding:0 14px;border-radius:999px;font-size:13px;font-weight:500;text-decoration:none;background:rgba(255,255,255,.08);color:var(--fg)}
-.top a.pill.main{background:#fff;color:var(--bg)}
+
 .bars{display:none;gap:2px;height:14px;align-items:flex-end}.row.on .bars{display:flex}.row.on .n{display:none}
 .bars i{width:3px;height:14px;background:#fff;border-radius:2px;transform-origin:bottom;animation:eq .9s ease-in-out infinite}
 .bars i:nth-child(2){animation-duration:.7s;animation-delay:-.3s}.bars i:nth-child(3){animation-duration:1.1s;animation-delay:-.55s}
@@ -37,7 +36,10 @@ button{background:#fff;color:var(--bg);border:0;font-weight:500;cursor:pointer;t
 audio{position:fixed;left:0;right:0;margin:0 auto;bottom:calc(16px + env(safe-area-inset-bottom));width:min(648px,calc(100% - 32px));animation:rise .4s var(--ease)}
 .err{color:#ff6b63;min-height:1em}
 /* "Go home": / sends people who are signed in to their library, everyone else to the about page */
-.home{display:inline-flex;align-items:center;height:40px;margin-top:18px;padding:0 20px;border-radius:999px;background:#fff;color:var(--bg);font-weight:500;text-decoration:none}
+:root{--grain:url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%27140%27 height=%27140%27%3E%3Cfilter id=%27n%27%3E%3CfeTurbulence type=%27fractalNoise%27 baseFrequency=%27.9%27 numOctaves=%272%27 stitchTiles=%27stitch%27/%3E%3CfeColorMatrix values=%270 0 0 0 1 0 0 0 0 1 0 0 0 0 1 .16 0 0 0 0%27/%3E%3C/filter%3E%3Crect width=%27100%25%27 height=%27100%25%27 filter=%27url(%23n)%27/%3E%3C/svg%3E")}
+.home,.top a.pill{display:inline-flex;align-items:center;gap:10px;height:42px;padding:0 18px 0 14px;border-radius:12px;font-weight:500;font-size:14px;color:var(--fg);text-decoration:none;text-shadow:0 1px 1px rgba(0,0,0,.35);background:var(--grain) 0 0/140px,linear-gradient(180deg,rgba(255,255,255,.11),rgba(255,255,255,.035));box-shadow:inset 0 1px 0 rgba(255,255,255,.15),inset 0 -1px 0 rgba(0,0,0,.28),0 1px 2px rgba(0,0,0,.35);transition:background .15s,transform .12s var(--ease)}
+.home:hover,.top a.pill:hover{background:var(--grain) 0 0/140px,linear-gradient(180deg,rgba(255,255,255,.16),rgba(255,255,255,.06))}.home:active,.top a.pill:active{transform:scale(.97)}
+.acts2{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px}.home svg{width:17px;height:17px;flex:none;opacity:.92}.top a.pill{height:36px;padding:0 14px;font-size:13px}
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(84px + env(safe-area-inset-bottom));z-index:9;max-width:calc(100% - 32px);padding:10px 16px;border-radius:14px;background:#2a2a2a;color:var(--fg);box-shadow:0 10px 30px rgba(0,0,0,.5),inset 0 0 0 1px rgba(255,99,90,.5);font-size:13px}
 .mw{display:block;width:80px;height:20px}
 .now{position:sticky;top:0;z-index:2;margin:0 -12px 18px;padding:14px 12px 12px;border-radius:16px;background:url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%27140%27 height=%27140%27%3E%3Cfilter id=%27n%27%3E%3CfeTurbulence type=%27fractalNoise%27 baseFrequency=%27.9%27 numOctaves=%272%27 stitchTiles=%27stitch%27/%3E%3CfeColorMatrix values=%270 0 0 0 1 0 0 0 0 1 0 0 0 0 1 .16 0 0 0 0%27/%3E%3C/filter%3E%3Crect width=%27100%25%27 height=%27100%25%27 filter=%27url(%23n)%27/%3E%3C/svg%3E") 0 0/140px,linear-gradient(165deg,rgba(62,62,62,.66),rgba(28,28,28,.6));-webkit-backdrop-filter:blur(18px) saturate(160%);backdrop-filter:blur(18px) saturate(160%);box-shadow:inset 0 1px 0 rgba(255,255,255,.09),0 12px 40px rgba(0,0,0,.35);animation:rise .35s var(--ease)}
@@ -56,7 +58,7 @@ audio{position:fixed;left:0;right:0;margin:0 auto;bottom:calc(16px + env(safe-ar
 .save{margin-top:12px;height:34px;padding:0 16px;font-size:13px}.save.on{background:rgba(255,255,255,.1);color:var(--fg)}
 @media(max-width:560px){.mwrap{display:none}.row{grid-template-columns:28px 1fr auto}.row.has-dl{grid-template-columns:28px 1fr auto 34px}.head{flex-direction:column;align-items:flex-start}.cover{width:120px;height:120px}h1{font-size:28px}}
 @media(prefers-reduced-motion:reduce){*{animation-duration:.01ms!important;animation-iteration-count:1!important}}
-</style></head><body><main id="m">${exists ? '' : '<div class="brand">[vault]</div><h1>Link not available</h1><p class="mono">[it may have expired or been turned off]</p><a class="home" href="/">Go home</a>'}</main>
+</style></head><body><main id="m">${exists ? '' : '<div class="brand">[vault]</div><h1>Link not available</h1><p class="mono">[it may have expired or been turned off]</p><div class="acts2"><a class="home" href="/library"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 17.5V6l10-2v11.5"/><circle cx="6.5" cy="17.5" r="2.5"/><circle cx="16.5" cy="15.5" r="2.5"/></svg>Go to your library</a><a class="home" href="/about"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10.5 12 4l8 6.5V19a1.5 1.5 0 0 1-1.5 1.5H15v-6h-6v6H5.5A1.5 1.5 0 0 1 4 19z"/></svg>Home page</a></div>'}</main>
 ${exists ? `<audio id="a" controls hidden></audio>
 <script>
 const token = location.pathname.split('/')[2], base = '/s/' + token, m = document.getElementById('m'), a = document.getElementById('a');
@@ -64,6 +66,7 @@ const el = (t, p = {}, ...k) => { const e = document.createElement(t); Object.as
 const fmt = s => s ? Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0') : '';
 const say = msg => { const t = el('div', { className: 'toast', textContent: msg }); t.setAttribute('role', 'alert'); document.body.append(t); setTimeout(() => t.remove(), 5000); };
 let me = null; // who's looking (once the link has opened)
+const HOME_IC = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10.5 12 4l8 6.5V19a1.5 1.5 0 0 1-1.5 1.5H15v-6h-6v6H5.5A1.5 1.5 0 0 1 4 19z"/></svg>', LIB_IC = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 17.5V6l10-2v11.5"/><circle cx="6.5" cy="17.5" r="2.5"/><circle cx="16.5" cy="15.5" r="2.5"/></svg>';
 const brand = () => el('div', { className: 'top' }, el('a', { className: 'brand', href: '/', textContent: '[vault]' }),
   ...(me ? [el('a', { className: 'pill main', href: '/library', textContent: 'Your library \u2192' })]
     : [el('a', { className: 'pill', href: '/', textContent: 'About' }), el('a', { className: 'pill main', href: '/login?next=' + encodeURIComponent(location.pathname), textContent: 'Sign in' })]));
@@ -72,7 +75,7 @@ async function open(password) {
   const r = await fetch(base + '/open', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password }) });
   const d = await r.json();
   if (r.status === 401) return ask(password ? d.error : '');
-  if (!r.ok) { m.replaceChildren(brand(), el('h1', { textContent: 'Link not available' }), el('p', { className: 'mono', textContent: '[it may have expired or been turned off]' }), el('a', { className: 'home', href: '/', textContent: 'Go home' })); return; }
+  if (!r.ok) { m.replaceChildren(brand(), el('h1', { textContent: 'Link not available' }), el('p', { className: 'mono', textContent: '[it may have expired or been turned off]' }), el('div', { className: 'acts2' }, el('a', { className: 'home', href: '/library', innerHTML: LIB_IC + 'Go to your library' }), el('a', { className: 'home', href: '/about', innerHTML: HOME_IC + 'Home page' }))); return; }
   if (d.viewer) { name = d.viewer.name || d.viewer.username; me = d.viewer; }
   show(d);
 }
