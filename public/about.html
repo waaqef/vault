@@ -30,7 +30,7 @@ a { color: inherit; }
 .glass { background: var(--glass); box-shadow: var(--glass-edge); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); }
 
 /* the page: a slow pastel wash drifting under a fine grain */
-.wash { position: fixed; inset: -20%; z-index: -2; pointer-events: none; filter: blur(40px); animation: drift 38s ease-in-out infinite alternate; }
+.wash { position: fixed; inset: -20%; z-index: -2; pointer-events: none; filter: blur(40px) hue-rotate(var(--lh, 0deg)); /* --lh: liquid.js */ animation: drift 38s ease-in-out infinite alternate; }
 .wash i { position: absolute; border-radius: 50%; opacity: .5; }
 .wash i:nth-child(1) { width: 46vw; height: 46vw; left: 6%; top: 4%; background: radial-gradient(closest-side, rgba(250,126,30,.32), transparent); }
 .wash i:nth-child(2) { width: 52vw; height: 52vw; right: 2%; top: 18%; background: radial-gradient(closest-side, rgba(214,41,118,.28), transparent); animation: drift 26s ease-in-out infinite alternate-reverse; }
@@ -331,4 +331,5 @@ addEventListener('scroll', fadeRibbon, { passive: true }); fadeRibbon();
 const io = new IntersectionObserver(es => es.forEach(e => e.isIntersecting && (e.target.classList.add('in'), io.unobserve(e.target))), { threshold: .12 });
 document.querySelectorAll('.rise').forEach(el => io.observe(el));
 </script>
+<script src="/liquid.js" defer></script>
 </body></html>

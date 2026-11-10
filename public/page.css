@@ -13,7 +13,9 @@
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--fg-2); font: 400 16px/1.65 var(--sans); letter-spacing: -0.011em; -webkit-font-smoothing: antialiased; }
-body::before { content: ""; position: fixed; inset: -20%; z-index: -2; pointer-events: none; filter: blur(50px); opacity: .7;
+/* --lx / --ly / --ls / --lh are set by liquid.js as you scroll (the glow moves and turns its colours) */
+body::before { content: ""; position: fixed; inset: -20%; z-index: -2; pointer-events: none; filter: blur(50px) hue-rotate(var(--lh, 0deg)); opacity: .7;
+  translate: var(--lx, 0) var(--ly, 0); scale: var(--ls, 1);
   background: radial-gradient(30% 30% at 20% 15%, rgba(250,126,30,.22), transparent), radial-gradient(34% 34% at 85% 30%, rgba(214,41,118,.18), transparent), radial-gradient(30% 30% at 45% 85%, rgba(79,91,213,.2), transparent); }
 body::after { content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none; background: var(--grain-soft) 0 0 / 160px; }
 .glass { background: var(--glass); box-shadow: var(--glass-edge); -webkit-backdrop-filter: blur(24px) saturate(170%); backdrop-filter: blur(24px) saturate(170%); }
@@ -35,6 +37,8 @@ nav .btn { display: inline-flex; align-items: center; height: 34px; padding: 0 1
 .rbtn:hover { background: var(--grain) 0 0 / 140px, linear-gradient(180deg, rgba(255,255,255,.16), rgba(255,255,255,.06)); }
 .rbtn:active { transform: scale(.97); }
 .rbtn svg { width: 17px; height: 17px; flex: none; opacity: .92; }
+.rbtn.light { color: #111; text-shadow: none; background: var(--grain) 0 0 / 140px, linear-gradient(180deg, #fff, #dcdcdc); box-shadow: inset 0 1px 0 #fff, inset 0 -1px 0 rgba(0,0,0,.12), 0 6px 18px rgba(0,0,0,.35); }
+.rbtn.light:hover { background: var(--grain) 0 0 / 140px, linear-gradient(180deg, #fff, #ececec); }
 main { max-width: 760px; margin: 28px auto 0; padding: 0 16px; }
 article { border-radius: 24px; padding: 40px 44px 44px; }
 .label { font-family: var(--mono); font-size: 12px; color: var(--fg-3); }
