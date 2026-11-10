@@ -71,7 +71,7 @@ const nameOf = u => u.display_name || u.username;
 const cleanName = (v, max) => String(v ?? '').replace(/[\u0000-\u001f\u007f]/g, '').replace(/\s+/g, ' ').trim().slice(0, max);
 // A number within a range, or null for anything that isn't one.
 const numOrNull = (v, min, max) => (v === null || v === undefined || v === '' || typeof v === 'boolean' || !isFinite(v) ? null : Math.min(max, Math.max(min, Number(v))));
-const publicUser = (u, extra = {}) => ({ id: u.id, username: u.username, displayName: u.display_name || null, avatar: u.avatar || null, isAdmin: !!u.is_admin,
+const publicUser = (u, extra = {}) => ({ id: u.id, username: u.username, displayName: u.display_name || null, avatar: u.avatar || null, isAdmin: !!u.is_admin, owner: u.id === OWNER,
   storage: u.storage, driveConnected: !!u.drive_refresh, home: homeOf(u), ...extra });
 // The person's Home layout: sections in order, built-in ones switched on/off, and their own named sections of projects.
 const homeOf = u => { try { const h = JSON.parse(u.home_layout || 'null'); return Array.isArray(h) ? h : null; } catch { return null; } };
@@ -242,6 +242,7 @@ async function deleteTrack(env, id, budget = { n: BUDGET }) {
   await env.DB.batch([
     env.DB.prepare('DELETE FROM comments WHERE track_id = ?').bind(id),
     env.DB.prepare("DELETE FROM shares WHERE kind = 'track' AND target_id = ?").bind(id),
+    env.DB.prepare('DELETE FROM playlist_tracks WHERE track_id = ?').bind(id),
     env.DB.prepare('DELETE FROM tracks WHERE id = ?').bind(id),
   ]);
   budget.n--;
@@ -257,6 +258,7 @@ async function deleteProject(env, id, budget = { n: BUDGET }) {
   await env.DB.batch([
     env.DB.prepare(`DELETE FROM comments WHERE track_id IN (${tracks})`).bind(id),
     env.DB.prepare(`DELETE FROM shares WHERE kind = 'track' AND target_id IN (${tracks})`).bind(id),
+    env.DB.prepare(`DELETE FROM playlist_tracks WHERE track_id IN (${tracks})`).bind(id),
     env.DB.prepare('DELETE FROM tracks WHERE project_id = ?').bind(id),
     env.DB.prepare("DELETE FROM shares WHERE kind = 'project' AND target_id = ?").bind(id),
     env.DB.prepare('DELETE FROM project_members WHERE project_id = ?').bind(id),
@@ -299,6 +301,8 @@ const liveTracks = `deleted_at IS NULL AND project_id IN (SELECT id FROM project
 
 on('GET', '/api/tree', async (req, env, b, p, url, ctx, u) => {
   ctx?.waitUntil?.(purgeOldTrash(env).catch(() => {}));
+  // last active (for the admin's analytics), written at most every 10 minutes
+  if (!(u.last_seen > now() - 10 * 60e3)) ctx?.waitUntil?.(env.DB.prepare('UPDATE users SET last_seen = ? WHERE id = ?').bind(now(), u.id).run().catch(() => {}));
   const [f, pr, t, tr, cm] = await env.DB.batch([
     env.DB.prepare('SELECT * FROM folders WHERE owner_id = ? ORDER BY name COLLATE NOCASE').bind(u.id),
     env.DB.prepare('SELECT * FROM projects WHERE deleted_at IS NULL AND owner_id = ? ORDER BY name COLLATE NOCASE').bind(u.id),
@@ -308,14 +312,17 @@ on('GET', '/api/tree', async (req, env, b, p, url, ctx, u) => {
   ]);
   const comments = Object.fromEntries(cm.results.map(r => [r.track_id, r.n]));
   const s = await space(env, u);
-  const [sp, st, sv, ib] = await env.DB.batch([
+  const [sp, st, sv, ib, pl] = await env.DB.batch([
     env.DB.prepare(SHARED_P).bind(u.id, u.id, u.id, ...readArgs(u)),
     env.DB.prepare(SHARED_T).bind(u.id, ...readArgs(u)),
     env.DB.prepare(SAVED_T).bind(u.id, u.id, now(), ...readArgs(u)),
     env.DB.prepare('SELECT COUNT(*) AS n FROM inbox WHERE user_id = ? AND read = 0').bind(u.id),
+    env.DB.prepare(`SELECT p.id, p.name, p.created_at, (SELECT json_group_array(track_id) FROM (SELECT track_id FROM playlist_tracks WHERE playlist_id = p.id ORDER BY position, added_at)) AS ids
+      FROM playlists p WHERE p.owner_id = ? ORDER BY p.name COLLATE NOCASE`).bind(u.id),
   ]);
+  const playlists = pl.results.map(x => ({ ...x, ids: JSON.parse(x.ids || '[]') }));
   return json({ folders: f.results, projects: pr.results, tracks: t.results, comments, trash: tr.results[0].n,
-    shared: { projects: sp.results, tracks: st.results, singles: sv.results }, unread: ib.results[0].n,
+    shared: { projects: sp.results, tracks: st.results, singles: sv.results }, unread: ib.results[0].n, playlists,
     usage: s.usage, limit: s.limit, me: publicUser(u, { driveEmail: s.email || '', needsDrive: usesDrive(env, u) && !u.drive_refresh }) });
 });
 
@@ -897,6 +904,101 @@ const drivePage = msg => `<!doctype html><meta charset="utf-8"><meta name="viewp
 
 // ---- admin: people ----
 const adminOnly = u => (u.is_admin ? null : fail('Only the admin can do that', 403));
+// ---- playlists: tracks from any projects you can play (yours, or shared with you), in your own order ----
+const ownPlaylist = (env, u, id) => env.DB.prepare('SELECT * FROM playlists WHERE id = ? AND owner_id = ?').bind(id, u.id).first();
+// Of these track ids, the ones this person may play.
+async function playable(env, u, ids) {
+  ids = [...new Set((Array.isArray(ids) ? ids : []).filter(x => typeof x === 'string'))].slice(0, 80); // D1 allows 100 values per query
+  if (!ids.length) return [];
+  const q = ids.map(() => '?').join(',');
+  const { results } = await env.DB.prepare(`SELECT t.id FROM tracks t JOIN projects p ON p.id = t.project_id WHERE t.id IN (${q}) AND t.deleted_at IS NULL AND p.deleted_at IS NULL
+    AND (t.project_id IN ${READABLE} OR t.id IN ${LINKED('track')})`).bind(...ids, ...readArgs(u), u.id, now()).all();
+  const ok = new Set(results.map(r => r.id));
+  return ids.filter(id => ok.has(id));
+}
+async function addToPlaylist(env, pl, ids) {
+  const start = (await env.DB.prepare('SELECT COALESCE(MAX(position), -1) + 1 AS p FROM playlist_tracks WHERE playlist_id = ?').bind(pl).first()).p;
+  if (ids.length) await env.DB.batch(ids.map((id, i) => env.DB.prepare('INSERT OR IGNORE INTO playlist_tracks (playlist_id, track_id, position, added_at) VALUES (?, ?, ?, ?)').bind(pl, id, start + i, now())));
+}
+on('POST', '/api/playlists', async (req, env, b, p, url, ctx, u) => {
+  if ((await env.DB.prepare('SELECT COUNT(*) AS n FROM playlists WHERE owner_id = ?').bind(u.id).first()).n >= 200) return fail('You have 200 playlists. Delete one to make another.');
+  const id = uid();
+  await env.DB.prepare('INSERT INTO playlists (id, owner_id, name, created_at) VALUES (?, ?, ?, ?)').bind(id, u.id, cleanName(b.name, 120) || 'New playlist', now()).run();
+  await addToPlaylist(env, id, await playable(env, u, b.track_ids));
+  return json({ id });
+});
+on('PATCH', '/api/playlists/:id', async (req, env, b, { id }, url, ctx, u) => {
+  if (!(await ownPlaylist(env, u, id))) return fail('Not found', 404);
+  const name = cleanName(b.name, 120);
+  if (name) await env.DB.prepare('UPDATE playlists SET name = ? WHERE id = ?').bind(name, id).run();
+  return json({ ok: true });
+});
+on('DELETE', '/api/playlists/:id', async (req, env, b, { id }, url, ctx, u) => {
+  if (!(await ownPlaylist(env, u, id))) return json({ ok: true });
+  await env.DB.batch([env.DB.prepare('DELETE FROM playlist_tracks WHERE playlist_id = ?').bind(id), env.DB.prepare('DELETE FROM playlists WHERE id = ?').bind(id)]);
+  return json({ ok: true }); // the songs themselves stay where they are
+});
+on('POST', '/api/playlists/:id/tracks', async (req, env, b, { id }, url, ctx, u) => {
+  if (!(await ownPlaylist(env, u, id))) return fail('Not found', 404);
+  const ids = await playable(env, u, b.ids);
+  if (!ids.length) return fail("Those tracks can't be added.");
+  await addToPlaylist(env, id, ids);
+  return json({ ok: true, added: ids.length });
+});
+on('DELETE', '/api/playlists/:id/tracks/:tid', async (req, env, b, { id, tid }, url, ctx, u) => {
+  if (!(await ownPlaylist(env, u, id))) return fail('Not found', 404);
+  await env.DB.prepare('DELETE FROM playlist_tracks WHERE playlist_id = ? AND track_id = ?').bind(id, tid).run();
+  return json({ ok: true });
+});
+on('POST', '/api/playlists/:id/order', async (req, env, b, { id }, url, ctx, u) => {
+  if (!(await ownPlaylist(env, u, id))) return fail('Not found', 404);
+  const ids = (Array.isArray(b.ids) ? b.ids : []).slice(0, 2000);
+  for (let i = 0; i < ids.length; i += 100)
+    await env.DB.batch(ids.slice(i, i + 100).map((tid, k) => env.DB.prepare('UPDATE playlist_tracks SET position = ? WHERE playlist_id = ? AND track_id = ?').bind(i + k, id, tid)));
+  return json({ ok: true });
+});
+
+// ---- search in comments (titles, notes and tags are searched in the app itself) ----
+on('GET', '/api/search', async (req, env, b, p, url, ctx, u) => {
+  const q = String(url.searchParams.get('q') || '').trim().slice(0, 100);
+  if (q.length < 2) return json({ comments: [] });
+  const like = '%' + q.replace(/[\\%_]/g, c => '\\' + c) + '%';
+  const { results } = await env.DB.prepare(`SELECT c.track_id, c.body, COALESCE(x.display_name, x.username, c.name) AS name
+    FROM comments c JOIN tracks t ON t.id = c.track_id LEFT JOIN users x ON x.id = c.user_id
+    WHERE c.body LIKE ? ESCAPE '\\' AND t.deleted_at IS NULL AND t.project_id IN ${MEMBER} ORDER BY c.created_at DESC LIMIT 200`).bind(like, u.id, u.id).all();
+  return json({ comments: results });
+});
+
+// ---- admin: analytics ----
+on('GET', '/api/admin/analytics', async (req, env, b, p, url, ctx, u) => {
+  if (adminOnly(u)) return adminOnly(u);
+  const day = 864e5, since = now() - 30 * day;
+  const [tot, signups, plays, top] = await env.DB.batch([
+    env.DB.prepare(`SELECT
+      (SELECT COUNT(*) FROM users) AS users,
+      (SELECT COUNT(*) FROM users WHERE last_seen > ?) AS active7,
+      (SELECT COUNT(*) FROM users WHERE last_seen > ?) AS active30,
+      (SELECT COUNT(*) FROM users WHERE created_at > ?) AS new7,
+      (SELECT COUNT(*) FROM projects WHERE deleted_at IS NULL) AS projects,
+      (SELECT COUNT(*) FROM tracks WHERE deleted_at IS NULL) AS tracks,
+      (SELECT COALESCE(SUM(size), 0) FROM track_versions) AS bytes,
+      (SELECT COUNT(*) FROM shares WHERE revoked = 0) AS links,
+      (SELECT COUNT(*) FROM listens) AS listens,
+      (SELECT COUNT(*) FROM comments) AS comments,
+      (SELECT COUNT(*) FROM playlists) AS playlists,
+      (SELECT COUNT(*) FROM bug_reports WHERE status = 'open') AS bugs`).bind(now() - 7 * day, now() - 30 * day, now() - 7 * day),
+    env.DB.prepare('SELECT CAST(created_at / ? AS INTEGER) AS d, COUNT(*) AS n FROM users WHERE created_at > ? GROUP BY d').bind(day, since),
+    env.DB.prepare('SELECT CAST(at / ? AS INTEGER) AS d, COUNT(*) AS n FROM listens WHERE at > ? GROUP BY d').bind(day, since),
+    env.DB.prepare(`SELECT x.id, x.username, x.display_name, x.avatar, x.last_seen, x.created_at,
+        (SELECT COUNT(*) FROM tracks t JOIN projects p ON p.id = t.project_id WHERE p.owner_id = x.id AND t.deleted_at IS NULL) AS tracks,
+        (SELECT COALESCE(SUM(v.size), 0) FROM track_versions v JOIN tracks t ON t.id = v.track_id JOIN projects p ON p.id = t.project_id WHERE p.owner_id = x.id) AS bytes
+      FROM users x ORDER BY tracks DESC LIMIT 8`),
+  ]);
+  // one entry per day for the last 30 days (days with nothing are 0)
+  const days = (rows) => { const m = new Map(rows.map(r => [r.d, r.n])), today = Math.floor(now() / day); return Array.from({ length: 30 }, (_, i) => ({ day: (today - 29 + i) * day, n: m.get(today - 29 + i) || 0 })); };
+  return json({ totals: tot.results[0], signups: days(signups.results), plays: days(plays.results), top: top.results });
+});
+
 // Bug reports: anyone signed in can send one (a few per address per 15 minutes); the admin gets a notification.
 on('POST', '/api/bugs', async (req, env, b, p, url, ctx, u) => {
   const lockKey = 'bug:' + clientIp(req), wait = await lockedFor(env, lockKey);
@@ -927,13 +1029,16 @@ on('GET', '/api/admin/users', async (req, env, b, p, url, ctx, u) => {
   const { results } = await env.DB.prepare(`SELECT x.id, x.username, x.display_name, x.avatar, x.is_admin, x.storage, x.disabled, x.created_at, x.drive_refresh IS NOT NULL AS drive,
       (SELECT COUNT(*) FROM tracks t JOIN projects p ON p.id = t.project_id WHERE p.owner_id = x.id AND t.deleted_at IS NULL) AS tracks,
       (SELECT COALESCE(SUM(v.size), 0) FROM track_versions v JOIN tracks t ON t.id = v.track_id JOIN projects p ON p.id = t.project_id WHERE p.owner_id = x.id) AS used
-    FROM users x ORDER BY x.is_admin DESC, x.created_at`).all();
+    FROM users x ORDER BY x.id = 'owner' DESC, x.is_admin DESC, x.created_at`).all();
   return json(results);
 });
 // Forgot their password: the admin makes a temporary one (shown once) and their devices are logged out.
+// Admins can manage people, but only the owner can change, reset or delete another admin.
+const guardAdmin = async (env, u, id) => (u.id !== OWNER && (await getUser(env, id))?.is_admin ? fail('Only the owner can change another admin.', 403) : null);
 on('POST', '/api/admin/users/:id/reset', async (req, env, b, { id }, url, ctx, u) => {
   if (adminOnly(u)) return adminOnly(u);
   if (id === OWNER) return fail("Change the admin password in Settings → Account.");
+  const no = await guardAdmin(env, u, id); if (no) return no;
   const abc = 'abcdefghjkmnpqrstuvwxyz23456789', bytes = crypto.getRandomValues(new Uint8Array(10));
   const password = [...bytes].map(x => abc[x % abc.length]).join('');
   const salt = uid();
@@ -942,7 +1047,12 @@ on('POST', '/api/admin/users/:id/reset', async (req, env, b, { id }, url, ctx, u
 });
 on('PATCH', '/api/admin/users/:id', async (req, env, b, { id }, url, ctx, u) => {
   if (adminOnly(u)) return adminOnly(u);
-  if (id === OWNER) return fail("You can't change the admin account here.");
+  if (id === OWNER) return fail("You can't change the owner's account here.");
+  const no = await guardAdmin(env, u, id); if (no) return no;
+  if ('is_admin' in b) {
+    if (u.id !== OWNER) return fail('Only the owner can make or remove admins.', 403);
+    await env.DB.prepare('UPDATE users SET is_admin = ? WHERE id = ?').bind(b.is_admin ? 1 : 0, id).run();
+  }
   if ('disabled' in b) await env.DB.prepare('UPDATE users SET disabled = ?, session = ? WHERE id = ?').bind(b.disabled ? 1 : 0, uid(), id).run();
   return json({ ok: true });
 });
@@ -962,13 +1072,16 @@ async function deleteAccount(env, id) {
     env.DB.prepare('DELETE FROM invites WHERE used_by = ?').bind(id),
     env.DB.prepare('DELETE FROM project_members WHERE user_id = ?').bind(id),
     env.DB.prepare('DELETE FROM inbox WHERE user_id = ?').bind(id),
+    env.DB.prepare('DELETE FROM playlist_tracks WHERE playlist_id IN (SELECT id FROM playlists WHERE owner_id = ?)').bind(id),
+    env.DB.prepare('DELETE FROM playlists WHERE owner_id = ?').bind(id),
     env.DB.prepare('DELETE FROM users WHERE id = ?').bind(id),
   ]);
   return { ok: true };
 }
 on('DELETE', '/api/admin/users/:id', async (req, env, b, { id }, url, ctx, u) => {
   if (adminOnly(u)) return adminOnly(u);
-  if (id === OWNER) return fail("The admin account can't be deleted.");
+  if (id === OWNER) return fail("The owner's account can't be deleted.");
+  const no = await guardAdmin(env, u, id); if (no) return no;
   return json(await deleteAccount(env, id));
 });
 // Delete my own account (needs the password). The admin account can't delete itself.
@@ -1005,6 +1118,12 @@ async function signup(req, env) {
   const lockKey = 'signup:' + clientIp(req), wait = await lockedFor(env, lockKey);
   if (wait) return fail(`Too many new accounts from here. Try again in ${Math.ceil(wait / 60)} min.`, 429);
   const b = await req.json().catch(() => ({}));
+  // Cloudflare Turnstile: on once TURNSTILE_SECRET (a secret) and TURNSTILE_SITE_KEY (in wrangler.toml) are set
+  if (env.TURNSTILE_SECRET) {
+    const r = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', { method: 'POST',
+      body: new URLSearchParams({ secret: env.TURNSTILE_SECRET, response: String(b.turnstile || ''), remoteip: clientIp(req) }) }).then(x => x.json()).catch(() => ({}));
+    if (!r.success) return fail('Please finish the "are you human" check, then try again.');
+  }
   const name = String(b.username || '').trim().toLowerCase();
   if (!USERNAME_RE.test(name)) return fail('Usernames are 3–24 letters, numbers, dots, dashes or underscores.');
   if (await env.DB.prepare('SELECT 1 FROM users WHERE username = ?').bind(name).first()) return fail('That username is taken.');
@@ -1309,6 +1428,7 @@ export default {
 
       if (path === '/api/login' && req.method === 'POST') return await login(req, env);
       if (path === '/api/signup' && req.method === 'POST') return await signup(req, env);
+      if (path === '/api/signup-config') return json({ turnstile: (env.TURNSTILE_SECRET && env.TURNSTILE_SITE_KEY) || null });
       if (path === '/api/logout') return json({ ok: true }, 200, { 'set-cookie': setCookie('auth', '', '/', 0) });
       if (path === '/api/shortcut-upload' && req.method === 'POST') return await shortcutUpload(req, env, url);
       if (path === '/api/drive/callback') return await driveCallback(req, env, url);

@@ -44,7 +44,7 @@ CREATE INDEX IF NOT EXISTS listens_share ON listens (share_token);
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY, username TEXT NOT NULL UNIQUE, pass_salt TEXT, pass_hash TEXT, is_admin INTEGER NOT NULL DEFAULT 0,
   avatar TEXT, storage TEXT NOT NULL DEFAULT 'drive', drive_refresh TEXT, drive_folder TEXT, session TEXT,
-  upload_key TEXT, disabled INTEGER NOT NULL DEFAULT 0, home_layout TEXT, display_name TEXT, created_at INTEGER NOT NULL
+  upload_key TEXT, disabled INTEGER NOT NULL DEFAULT 0, home_layout TEXT, display_name TEXT, last_seen INTEGER, created_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS invites (code TEXT PRIMARY KEY, created_by TEXT NOT NULL, used_by TEXT, used_at INTEGER, created_at INTEGER NOT NULL);
 INSERT OR IGNORE INTO users (id, username, is_admin, storage, created_at) VALUES ('owner', 'admin', 1, 'b2', 0);
@@ -60,3 +60,6 @@ CREATE INDEX IF NOT EXISTS activity_project ON activity (project_id, created_at)
 CREATE TABLE IF NOT EXISTS inbox (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, title TEXT NOT NULL, body TEXT, url TEXT, read INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS inbox_user ON inbox (user_id, created_at);
 CREATE TABLE IF NOT EXISTS bug_reports (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, text TEXT NOT NULL, info TEXT, status TEXT NOT NULL DEFAULT 'open', created_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS playlists (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, name TEXT NOT NULL, created_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS playlist_tracks (playlist_id TEXT NOT NULL, track_id TEXT NOT NULL, position REAL NOT NULL DEFAULT 0, added_at INTEGER NOT NULL, PRIMARY KEY (playlist_id, track_id));
+CREATE INDEX IF NOT EXISTS playlists_owner ON playlists (owner_id);

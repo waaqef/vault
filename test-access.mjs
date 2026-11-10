@@ -109,6 +109,27 @@ try {
   assert.equal((await call(owner, 'POST', '/api/projects', { name: 12345 })).status, 200, 'a number for a project name is not an error');
   assert.equal((await call(owner, 'POST', '/api/presets', { name: 'x', settings: 'not settings' })).status, 400, 'presets must be settings');
 
+  // playlists: only tracks you can play go in, and only you can change yours
+  const { data: { id: mix } } = await call(stranger, 'POST', '/api/playlists', { name: 'mix', track_ids: [track] });
+  assert.equal((await call(stranger, 'GET', '/api/tree')).data.playlists.find(p => p.id === mix).ids.length, 0, "a stranger can't put someone else's track in a playlist");
+  const { data: { id: lmix } } = await call(listener, 'POST', '/api/playlists', { name: 'mine', track_ids: [track] });
+  assert.equal((await call(listener, 'GET', '/api/tree')).data.playlists.find(p => p.id === lmix).ids.length, 1, 'a listener can add a shared track to a playlist');
+  assert.equal((await call(stranger, 'PATCH', `/api/playlists/${lmix}`, { name: 'x' })).status, 404, "someone else can't rename your playlist");
+  assert.equal((await call(stranger, 'GET', '/api/search?q=nice')).data.comments.length, 0, "a stranger's search doesn't find others' comments");
+  assert.equal((await call(listener, 'GET', '/api/search?q=nice')).data.comments.length, 1, 'search finds comments on projects you are on');
+
+  // admins: only the owner makes them; admins see analytics; an admin can't touch another admin
+  assert.equal((await call(editor, 'GET', '/api/admin/analytics')).status, 403, 'analytics are for admins');
+  const eddieId = (await call(owner, 'GET', '/api/admin/users')).data.find(x => x.username === 'eddie').id;
+  const lisaId = (await call(owner, 'GET', '/api/admin/users')).data.find(x => x.username === 'lisa').id;
+  assert.equal((await call(owner, 'PATCH', `/api/admin/users/${eddieId}`, { is_admin: true })).status, 200, 'the owner makes eddie an admin');
+  assert.equal((await call(editor, 'GET', '/api/admin/analytics')).status, 200, 'now eddie sees analytics');
+  assert.equal((await call(editor, 'PATCH', `/api/admin/users/${lisaId}`, { is_admin: true })).status, 403, "an admin can't make admins");
+  await call(owner, 'PATCH', `/api/admin/users/${lisaId}`, { is_admin: true });
+  assert.equal((await call(editor, 'PATCH', `/api/admin/users/${lisaId}`, { disabled: true })).status, 403, "an admin can't turn off another admin");
+  assert.equal((await call(editor, 'DELETE', '/api/admin/users/owner')).status, 400, "nobody deletes the owner");
+  await call(owner, 'PATCH', `/api/admin/users/${lisaId}`, { is_admin: false });
+
   // bad edits are ignored rather than breaking the track: no project, a blank name
   await call(owner, 'PATCH', `/api/tracks/${track}`, { project_id: null, name: '   ' });
   const kept = (await call(owner, 'GET', '/api/tree')).data.tracks.find(t => t.id === track);

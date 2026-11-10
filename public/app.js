@@ -5,7 +5,7 @@ import { decodeAudio, bpmKeyOf, parseName } from './detect.js';
 import { peaksOf, waveSvg } from './wave.js';
 import { makeZip, safeName } from './zip.js';
 
-const APP_VERSION = '[vault] v2.7'; // shown in Settings and sent with bug reports
+const APP_VERSION = '[vault] v2.8'; // shown in Settings and sent with bug reports
 // ---- helpers ------------------------------------------------------------------
 const $ = (s, el = document) => el.querySelector(s);
 function h(tag, attrs = {}, ...kids) {
@@ -165,8 +165,10 @@ const S = {
   folders: [], projects: [], tracks: [], usage: 0, limit: 10e9, online: true,
   view: { type: 'home' }, homeFolder: null, sort: store.get('sort', 'newest'), projectSort: store.get('projectSort', 'manual'), q: '', tag: '',
   open: new Set(store.get('open', [])), offline: new Set(store.get('offline', [])),
-  filter: blankFilter(), select: null, trash: 0, comments: {}, sharedProjects: [], sharedTracks: [],
+  filter: blankFilter(), select: null, trash: 0, comments: {}, sharedProjects: [], sharedTracks: [], playlists: [],
+  searchIn: 'all', commentHits: new Map(), // search: where to look, and tracks whose comments match (from the server)
 };
+const playlistOf = id => S.playlists.find(p => p.id === id);
 const projectOf = id => S.projects.find(p => p.id === id) || S.sharedProjects.find(p => p.id === id);
 const trackOf = id => S.tracks.find(t => t.id === id) || S.sharedTracks.find(t => t.id === id);
 // Shared with me: projects people added me to (viewer or editor) and ones saved from a link. A single saved
@@ -200,7 +202,7 @@ async function load() {
     $('#login')?.closest('dialog')?.close(); // e.g. Drive was just connected in Safari
     const next = takeNext();
     if (next) return location.replace(next);
-    if (d.me && !d.me.isAdmin && !d.projects.length && !d.trash && !S.sharedProjects.length) firstProject(); // not for people who joined to listen to something shared
+    if (d.me && !d.me.owner && !d.projects.length && !d.trash && !S.sharedProjects.length) firstProject(); // not for people who joined to listen to something shared
     askForNotifications();
     // once per session: if Backblaze is refusing files (key or daily limit), say so straight away
     if (!S.checkedStorage && S.tracks.length) { S.checkedStorage = true; storageProblem().then(why => why && toast(why, { error: true, ms: 15000 })); }
@@ -212,7 +214,7 @@ async function load() {
     S.online = !(e instanceof TypeError);
     toast(S.online ? `Couldn't load your library: ${e.message}` : "You're offline. Showing your saved library.", { error: S.online, ms: S.online ? 8000 : 3500 });
   }
-  if (S.view.type === 'project' && !projectOf(S.view.id)) S.view = { type: 'all' };
+  if ((S.view.type === 'project' && !projectOf(S.view.id)) || (S.view.type === 'playlist' && !playlistOf(S.view.id))) S.view = { type: 'all' };
   render();
   driveBack();
   if (new URLSearchParams(location.search).has('bugs')) { history.replaceState(null, '', '/library'); if (S.me?.isAdmin) bugsDialog(); }
@@ -271,13 +273,22 @@ function showLogin() {
     const shown = field('text', 'name', { maxLength: 40, placeholder: 'e.g. Maya Lee', autocapitalize: 'words' });
     const user = field('text', 'username', { required: true, minLength: 3, maxLength: 24, pattern: '[A-Za-z0-9._\\-]+', placeholder: 'letters, numbers, . _ -' });
     const pw = field('password', 'new-password', { required: true, minLength: 8 }), again = field('password', 'new-password', { required: true });
+    // Cloudflare Turnstile: usually invisible; sometimes a tick box
+    let human = '';
+    const check = h('div', { className: 'ts-box' });
+    api('/signup-config').then(async c => {
+      if (!c.turnstile) return;
+      if (!window.turnstile) await loadScript('https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit');
+      window.turnstile.render(check, { sitekey: c.turnstile, theme: 'dark', callback: t => { human = t; }, 'expired-callback': () => { human = ''; } });
+    }).catch(() => {});
     fill(box, h('div', { className: 'brandmark' }, '[make an account]'), form(async () => {
       if (pw.value !== again.value) throw new Error("The passwords don't match.");
-      await api('/signup', { method: 'POST', body: { username: user.value.trim(), display_name: shown.value.trim(), password: pw.value, avatar } });
+      try { await api('/signup', { method: 'POST', body: { username: user.value.trim(), display_name: shown.value.trim(), password: pw.value, avatar, turnstile: human } }); }
+      catch (x) { if (window.turnstile && check.firstChild) { window.turnstile.reset(check); human = ''; } throw x; }
       history.replaceState(null, '', '/library' + location.search.replace(/[?&]signup=1/, '').replace(/^&/, '?'));
       driveStep(box, d);
     }, pic, h('small', { className: 'muted' }, 'Profile picture (optional)'),
-    h('label', {}, '[name] what people see (optional)', shown), h('label', {}, '[username] unique, for signing in', user), h('label', {}, '[password] 8+ characters', pw), h('label', {}, '[password again]', again), err(),
+    h('label', {}, '[name] what people see (optional)', shown), h('label', {}, '[username] unique, for signing in', user), h('label', {}, '[password] 8+ characters', pw), h('label', {}, '[password again]', again), check, err(),
     h('button', { className: 'btn primary', style: big }, 'Create account')),
     link('Already have an account? Sign in', signIn),
     h('small', { className: 'login-links' }, h('a', { href: '/privacy' }, 'Privacy'), h('a', { href: '/terms' }, 'Terms')));
@@ -373,6 +384,10 @@ function renderSide() {
       h('button', { className: 'icon-btn sm', title: 'New folder', 'aria-label': 'New folder', onclick: () => newFolder(null) }, icon('folderPlus', 16)),
       h('button', { className: 'icon-btn sm', title: 'New project', 'aria-label': 'New project', onclick: () => newProject(null) }, icon('plus', 16)))),
     tree(null, 0),
+    h('div', { className: 'section' }, h('span', { className: 'mono' }, '[playlists]'), h('span', { className: 'tools' },
+      h('button', { className: 'icon-btn sm', title: 'New playlist', 'aria-label': 'New playlist', onclick: () => newPlaylist() }, icon('plus', 16)))),
+    S.playlists.map(pl => h('button', { className: 'nav' + (S.view.type === 'playlist' && S.view.id === pl.id ? ' on' : ''), onclick: () => setView({ type: 'playlist', id: pl.id }) },
+      h('span', { className: 'caret' }), h('span', { className: 'nav-ic' }, icon('queue', 15)), h('span', { className: 'label' }, pl.name), h('span', { className: 'count' }, pl.ids.filter(trackOf).length))),
     S.sharedProjects.length > 0 && h('div', { className: 'section' }, h('span', { className: 'mono' }, '[shared with me]')),
     S.sharedProjects.map(p => h('button', { className: 'nav' + (S.view.type === 'project' && S.view.id === p.id ? ' on' : ''), title: `${p.name}, shared by ${p.owner}${p.role === 'editor' ? ' (you can edit)' : ''}`,
       onclick: () => setView({ type: 'project', id: p.id }) },
@@ -385,10 +400,16 @@ function renderSide() {
 
 function visibleTracks() {
   let list = S.view.type === 'project' ? (isShared(S.view.id) ? S.sharedTracks : S.tracks).filter(t => t.project_id === S.view.id)
+    : S.view.type === 'playlist' ? (playlistOf(S.view.id)?.ids || []).map(trackOf).filter(Boolean)
     : S.view.type === 'offline' ? [...S.tracks, ...S.sharedTracks].filter(isOffline)
       : S.view.type === 'starred' ? S.tracks.filter(t => t.mark === 'star') : S.q ? [...S.tracks, ...S.sharedTracks] : [...S.tracks]; // searching covers shared projects too
-  const q = S.q.toLowerCase();
-  if (q) list = list.filter(t => [t.name, t.tags, t.notes, t.artist, projectOf(t.project_id)?.name].some(v => (v || '').toLowerCase().includes(q)));
+  const q = S.q.trim().toLowerCase();
+  if (q) {
+    const look = { title: t => [t.name], notes: t => [t.notes], tags: t => [t.tags], producer: t => [t.artist], comments: () => [] }[S.searchIn]
+      || (t => [t.name, t.tags, t.notes, t.artist, projectOf(t.project_id)?.name]);
+    const inComments = S.searchIn === 'all' || S.searchIn === 'comments';
+    list = list.filter(t => (inComments && S.commentHits.has(t.id)) || look(t).some(v => (v || '').toLowerCase().includes(q)));
+  }
   const f = S.filter;
   if (f.tag) list = list.filter(t => tagsOf(t).includes(f.tag));
   if (f.bpmMin) list = list.filter(t => t.bpm && t.bpm >= +f.bpmMin);
@@ -396,6 +417,8 @@ function visibleTracks() {
   if (f.key) list = list.filter(t => t.musical_key === f.key);
   if (f.mode) list = list.filter(t => (t.musical_key || '').endsWith(' ' + f.mode));
   if (f.throw) list = list.filter(t => (t.mark === 'throw') === (f.throw === 'only'));
+  if (f.star) list = list.filter(t => t.mark === 'star');
+  if (f.added) list = list.filter(t => t.created_at > Date.now() - f.added * 864e5);
   const by = {
     manual: (a, b) => a.position - b.position,
     newest: (a, b) => b.created_at - a.created_at,
@@ -405,11 +428,13 @@ function visibleTracks() {
     key: (a, b) => (KEYS.indexOf(a.musical_key) + 1 || 99) - (KEYS.indexOf(b.musical_key) + 1 || 99),
     length: (a, b) => (a.duration ?? 0) - (b.duration ?? 0),
   };
+  if (S.view.type === 'playlist' && effSort() === 'manual') return list; // the playlist's own order
   return list.sort(by[effSort()] || by.newest);
 }
 // Inside a project the order is its own setting (Custom, the arranged order, by default); everywhere else Newest.
-const effSort = () => (S.view.type === 'project' ? S.projectSort : S.sort === 'manual' ? 'newest' : S.sort);
-function setSort(v) { const k = S.view.type === 'project' ? 'projectSort' : 'sort'; S[k] = v; store.set(k, v); }
+const ordered = () => S.view.type === 'project' || S.view.type === 'playlist'; // views with their own (Custom) order
+const effSort = () => (ordered() ? S.projectSort : S.sort === 'manual' ? 'newest' : S.sort);
+function setSort(v) { const k = ordered() ? 'projectSort' : 'sort'; S[k] = v; store.set(k, v); }
 const tagsOf = t => (t.tags || '').split(',').map(s => s.trim()).filter(Boolean);
 const filterCount = () => Object.values(S.filter).filter(Boolean).length;
 
@@ -457,7 +482,7 @@ function renderMain() {
   tintFrom(S.view.type === 'project' ? projectOf(S.view.id)?.cover || null : null);
   const main = $('#main');
   if (S.view.type === 'trash') { renderBulk(); return renderTrash(); }
-  const p = S.view.type === 'project' && projectOf(S.view.id);
+  const p = S.view.type === 'project' && projectOf(S.view.id), pl = S.view.type === 'playlist' && playlistOf(S.view.id);
   const list = visibleTracks();
   const fc = filterCount();
   const shared = p && p.owner, ro = p && !canEdit(p.id); // a shared project, and whether it's listen-only
@@ -466,7 +491,7 @@ function renderMain() {
     h('button', { id: 'menu-btn', className: 'icon-btn', 'aria-label': 'Menu', onclick: () => document.body.classList.toggle('side-open') }, icon('menu', 20)),
     h('label', { className: 'search' }, icon('search', 16),
       h('input', { type: 'search', placeholder: 'Search', 'aria-label': 'Search', value: S.q, oninput(e) {
-        S.q = e.target.value;
+        S.q = e.target.value; searchComments();
         if (S.view.type !== 'home') return renderList(true);
         setView({ type: 'all' });
         const i = $('.search input'); i.focus(); i.setSelectionRange(i.value.length, i.value.length);
@@ -475,7 +500,7 @@ function renderMain() {
       icon('filter', 16), h('span', { className: 'lbl' }, 'Filter'), fc > 0 && h('span', { className: 'badge num' }, fc)),
     S.view.type !== 'home' && h('select', { 'aria-label': 'Sort', onchange(e) { setSort(e.target.value); renderList(true); } },
       [['manual', 'Custom'], ['newest', 'Newest'], ['oldest', 'Oldest'], ['name', 'Name'], ['bpm', 'BPM'], ['key', 'Key'], ['length', 'Length']]
-        .filter(([v]) => p || v !== 'manual').map(([v, l]) => h('option', { value: v, selected: effSort() === v }, l))),
+        .filter(([v]) => p || pl || v !== 'manual').map(([v, l]) => h('option', { value: v, selected: effSort() === v }, l))),
     h('span', { className: 'grow' }),
     h('button', { className: 'btn', onclick: recordDialog, disabled: !S.online || ro, title: whyOff(ro), 'aria-label': 'Record' }, icon('mic', 16), h('span', { className: 'lbl' }, 'Record')),
     h('button', { className: 'btn primary', disabled: !S.online || ro, title: whyOff(ro), async onclick() { const f = await pickFiles(ACCEPT_AUDIO); f.length && uploadTracks(f, await targetProject()); }, 'aria-label': 'Upload' }, icon('upload', 16), h('span', { className: 'lbl' }, 'Upload')),
@@ -491,7 +516,7 @@ function renderMain() {
       : S.select ? h('button', { className: 'btn primary', onclick: () => { S.select = null; renderMain(); } }, icon('check', 16), 'Done')
         : list.length > 0 && h('button', { className: 'btn primary', onclick: () => playList(list, 0, { shuffle: false }) }, icon('play', 14), 'Play'),
     !busy && list.length > 1 && h('button', { className: 'btn', 'aria-label': 'Shuffle', onclick: () => playList(list, Math.floor(Math.random() * list.length), { shuffle: true }) }, labelled('shuffle', 'Shuffle')),
-    p && !ro && !busy && list.length > 1 && h('button', { className: 'btn', 'aria-label': 'Rearrange', onclick: () => {
+    (p || pl) && !ro && !busy && list.length > 1 && h('button', { className: 'btn', 'aria-label': 'Rearrange', onclick: () => {
       S.arrange = true;
       if (S.projectSort !== 'manual') setSort('manual');
       renderMain();
@@ -501,6 +526,7 @@ function renderMain() {
     S.select && h('span', { className: 'mono arrange-hint' }, '[tap tracks to select]'),
     p && !shared && !busy && h('button', { className: 'btn', 'aria-label': 'Share', onclick: () => shareDialog('project', p.id, p.name) }, labelled('share', 'Share')),
     p && !busy && h('button', { className: 'icon-btn', style: { background: 'var(--fill-2)' }, 'aria-label': 'Project options', onclick: () => projectMenu(p) }, icon('more', 18)),
+    pl && !busy && h('button', { className: 'icon-btn', style: { background: 'var(--fill-2)' }, 'aria-label': 'Playlist options', onclick: () => playlistMenu(pl) }, icon('more', 18)),
   ];
   const dur = list.reduce((s, t) => s + (t.duration || 0), 0);
   const count = `${list.length} ${list.length === 1 ? 'track' : 'tracks'} · ${fmtTime(dur)}${fc ? ' · filtered' : ''}`;
@@ -512,6 +538,12 @@ function renderMain() {
         h('div', { className: 'eyebrow' }, shared ? `[shared by ${p.owner} · ${p.role === 'editor' ? 'you can edit' : 'listen only'}]` : '[project]'),
         h('h1', {}, p.name),
         h('div', { className: 'meta mono' }, count),
+        h('div', { className: 'actions' }, actions)))
+    : pl ? h('div', { className: 'hero' }, playlistArt(pl),
+      h('div', {},
+        h('div', { className: 'eyebrow' }, '[playlist]'),
+        h('h1', {}, pl.name),
+        h('div', { className: 'meta mono' }, list.length ? count : 'empty · add tracks with ⋯ → Add to playlist'),
         h('div', { className: 'actions' }, actions)))
     : h('div', { className: 'hero' }, h('div', {},
       h('div', { className: 'eyebrow' }, { offline: '[on this device]', starred: '[favourites]' }[S.view.type] || '[library]'),
@@ -705,9 +737,9 @@ function renderList(animate = false) {
   if (!box) return;
   const list = visibleTracks();
   const p = S.view.type === 'project';
-  const manual = p && S.projectSort === 'manual';
+  const manual = ordered() && S.projectSort === 'manual';
   box.classList.remove('stagger');
-  box.classList.toggle('arranging', !!S.arrange && p);
+  box.classList.toggle('arranging', !!S.arrange && ordered());
   box.classList.toggle('selecting', !!S.select);
   if (animate) { void box.offsetWidth; box.classList.add('stagger'); }
   if (!list.length) {
@@ -717,7 +749,7 @@ function renderList(animate = false) {
         : S.view.type === 'offline' ? ['Nothing downloaded yet', 'Use ⋯ → Save offline on a track or a project to play it without a connection.']
           : p && !canEdit(S.view.id) ? ['No tracks yet', 'Nothing has been added to this project.']
             : ['Nothing here yet', touch ? 'Tap Upload to add your first tracks.' : 'Drag audio files or folders here, or press Upload.'];
-    box.replaceChildren(h('div', { className: 'empty' },
+    box.replaceChildren(searchChips() || '', h('div', { className: 'empty' },
       h('span', { className: 'disc' }),
       h('b', {}, title),
       text,
@@ -725,7 +757,7 @@ function renderList(animate = false) {
     return;
   }
   let dragId = null;
-  fill(box,
+  fill(box, searchChips(),
     h('div', { className: 'trow thead' }, h('span'), h('span', {}, '[title]'), h('span', { className: 'c-wave' }), h('span', { className: 'cell c-bpm' }, '[bpm]'), h('span', { className: 'cell c-key' }, '[key]'), h('span', { className: 'cell' }, '[time]'), h('span'), h('span'), h('span')),
     list.map((t, i) => h('div', {
       className: 'trow' + (cur?.id === t.id ? ' on' : '') + (S.select?.has(t.id) ? ' selected' : '') + (t.mark === 'throw' ? ' throw' : '') + (justMarked?.id === t.id && justMarked.mark === 'throw' ? ' just-throw' : ''),
@@ -778,14 +810,15 @@ function renderList(animate = false) {
         t.notes && h('span', { className: 'saved', title: 'Has notes' }, icon('note', 12)),
         S.comments[t.id] > 0 && h('span', { className: 'saved', title: `${S.comments[t.id]} comments` }, icon('comment', 12), S.comments[t.id]),
         h('span', {}, [t.artist, !p && projectOf(t.project_id)?.name, fmtAdded(t.created_at)].filter(Boolean).join(' · ')),
-        tagsOf(t).map(x => h('span', { className: 'tag' }, x)))),
+        tagsOf(t).map(x => h('span', { className: 'tag' }, x))),
+      S.q.trim() && S.commentHits.has(t.id) && h('div', { className: 'hit' }, icon('comment', 12), h('b', {}, S.commentHits.get(t.id).name), ' ', S.commentHits.get(t.id).body)),
     waveCell(t),
     h('span', { className: 'cell c-bpm num' }, t.bpm ? Math.round(t.bpm * 10) / 10 : '–'),
     h('span', { className: 'cell c-key num' }, t.musical_key || '–'),
     h('span', { className: 'cell num' }, fmtTime(t.duration)),
     S.arrange || S.select ? markDot(t, 'star') : canEdit(t.project_id) ? starBtn(t) : h('span'),
     S.arrange || S.select ? markDot(t, 'throw') : canEdit(t.project_id) ? throwBtn(t) : h('span'),
-    S.arrange && p
+    S.arrange && ordered()
       ? h('span', { className: 'grip', role: 'button', tabIndex: 0, 'aria-label': `Move ${t.name}. Drag, or use the arrow keys.`,
           onpointerdown(e) { startReorder(e, this.closest('.trow')); },
           onclick(e) { e.stopPropagation(); },
@@ -961,6 +994,13 @@ addEventListener('contextmenu', e => { if (dragging || sideDrag) e.preventDefaul
 // `ids` are the tracks on screen in their new order. While a search or filter hides some, the shown ones swap
 // between the places they already had and the hidden ones stay put.
 async function reorder(ids) {
+  const pl = S.view.type === 'playlist' && playlistOf(S.view.id);
+  if (pl) { // the shown ones swap places; tracks hidden by a search or filter stay put
+    const shown = new Set(ids), next = [...ids];
+    pl.ids = pl.ids.map(id => (shown.has(id) ? next.shift() : id));
+    renderList();
+    return api(`/playlists/${pl.id}/order`, { method: 'POST', body: { ids: pl.ids } }).catch(oops);
+  }
   const pid = trackOf(ids[0])?.project_id, shown = new Set(ids), next = [...ids];
   const all = [...S.tracks, ...S.sharedTracks].filter(t => t.project_id === pid).sort((a, b) => a.position - b.position || a.created_at - b.created_at);
   const full = all.map(t => (shown.has(t.id) ? next.shift() : t.id));
@@ -1572,7 +1612,7 @@ async function handleDrop(dt, projectId, at) {
 
 // ---- tracks -----------------------------------------------------------------------------
 function trackMenu(t, list) {
-  const manual = S.view.type === 'project' && S.projectSort === 'manual';
+  const manual = ordered() && S.projectSort === 'manual', inPl = S.view.type === 'playlist' && playlistOf(S.view.id);
   const i = list.indexOf(t);
   const move = d => { const ids = list.map(x => x.id); ids.splice(i, 1); ids.splice(i + d, 0, t.id); reorder(ids); };
   const ed = canEdit(t.project_id), own = !isShared(t.project_id); // shared tracks: viewers listen, editors change them
@@ -1582,6 +1622,8 @@ function trackMenu(t, list) {
     ed && '-',
     { icon: 'play', label: 'Play next', run: () => playNextTrack(t) },
     { icon: 'queue', label: 'Add to queue', run: () => addToQueue(t) },
+    { icon: 'plus', label: 'Add to playlist…', run: () => addToPlaylist([t]) },
+    inPl && { icon: 'close', label: 'Remove from this playlist', run: () => api(`/playlists/${inPl.id}/tracks/${t.id}`, { method: 'DELETE' }).then(() => { inPl.ids = inPl.ids.filter(x => x !== t.id); render(); }, oops) },
     '-',
     ed && { icon: 'sliders', label: 'Edit audio', run: () => openEditor(t) },
     ed && { icon: 'upload', label: 'Replace with a new version', run: () => replaceAudio(t) },
@@ -1594,8 +1636,8 @@ function trackMenu(t, list) {
     isOffline(t) ? { icon: 'close', label: 'Remove from this device', run: () => removeOffline(t) } : { icon: 'download', label: 'Save offline', run: () => saveOffline(t) },
     ed && { icon: 'download', label: 'Export file', run: () => exportTrack(t) },
     '-',
-    ed && manual && i > 0 && { icon: 'up', label: 'Move up', run: () => move(-1) },
-    ed && manual && i < list.length - 1 && { icon: 'down', label: 'Move down', run: () => move(1) },
+    (ed || inPl) && manual && i > 0 && { icon: 'up', label: 'Move up', run: () => move(-1) },
+    (ed || inPl) && manual && i < list.length - 1 && { icon: 'down', label: 'Move down', run: () => move(1) },
     '-',
     ed && { icon: 'trash', label: 'Move to trash', danger: true, async run() {
       if (!(await api(`/tracks/${t.id}`, { method: 'DELETE' }).then(() => true, oops))) return;
@@ -2155,7 +2197,7 @@ async function storageProblem() {
   const r = await api('/storage-check').catch(() => null);
   if (!r || r.ok) return (lastWhy = '');
   if (r.code === 'drive') return (lastWhy = `Google Drive isn't letting [vault] read your files. ${r.message}`);
-  if (!S.me?.isAdmin) return (lastWhy = "Your files couldn't load right now. Try again in a bit.");
+  if (!S.me?.owner) return (lastWhy = "Your files couldn't load right now. Try again in a bit.");
   const text = `${r.code} ${r.message}`.toLowerCase();
   const reset = new Date(); reset.setUTCHours(24, 0, 0, 0);
   lastWhy = /cap|exceed|limit/.test(text)
@@ -2616,10 +2658,11 @@ async function settingsDialog(only) {
         } }, 'Change')),
       S.me?.storage === 'drive' && row('Google Drive', S.me.driveEmail || (S.me.driveConnected ? 'Connected' : 'Not connected'),
         h('a', { className: 'btn', href: '/api/drive/connect' }, S.me.driveConnected ? 'Reconnect' : 'Connect')),
+      S.me?.isAdmin && row('Analytics', 'Sign-ups, activity, plays and storage', h('button', { className: 'btn', onclick: () => { d.close(); analyticsDialog(); } }, 'Open')),
       S.me?.isAdmin && row('People', 'Everyone with an account', h('button', { className: 'btn', onclick: () => { d.close(); peopleDialog(); } }, 'Manage')),
       row('Password', 'Changing it logs out your other devices', h('button', { className: 'btn', onclick: () => { d.close(); passwordDialog(); } }, 'Change')),
       row('Log out', 'On this device only. Songs kept on this device are removed.', h('button', { className: 'btn danger', onclick: logout }, 'Log out')),
-      S.me && !S.me.isAdmin && row('Delete account', 'Deletes your projects and the files [vault] made in your Google Drive. This can\'t be undone.',
+      S.me && !S.me.owner && row('Delete account', 'Deletes your projects and the files [vault] made in your Google Drive. This can\'t be undone.',
         h('button', { className: 'btn danger', onclick: () => { d.close(); deleteAccountDialog(); } }, 'Delete'))),
     !only && h('div', { className: 'set-sec' }, h('h3', {}, '[support]'),
       row('Report a bug', 'Something broken or confusing? Tell me what happened.', h('button', { className: 'btn', onclick: () => { d.close(); bugDialog(); } }, 'Report')),
@@ -2770,8 +2813,13 @@ async function peopleDialog() {
     fill(box,
       h('div', { className: 'set-sec' }, h('h3', {}, '[accounts]'),
         users.map(u => h('div', { className: 'set-row' }, h('span', { className: 'me-row' }, avatarEl(u, 'avatar lg'),
-          h('span', {}, nameOf(u) + (u.display_name ? ` @${u.username}` : '') + (u.disabled ? ' (off)' : ''), h('small', {}, u.is_admin ? `Admin · Backblaze · ${fmtBytes(u.used)}` : `${u.tracks} ${u.tracks === 1 ? 'track' : 'tracks'} · ${fmtBytes(u.used)} · ${u.drive ? 'Google Drive' : 'Drive not connected'}`))),
-          !u.is_admin && h('span', { className: 'btns', style: { margin: 0 } },
+          h('span', {}, nameOf(u) + (u.display_name ? ` @${u.username}` : '') + (u.disabled ? ' (off)' : ''), h('small', {}, u.id === 'owner' ? `Owner · Backblaze · ${fmtBytes(u.used)}` : `${u.is_admin ? 'Admin · ' : ''}${u.tracks} ${u.tracks === 1 ? 'track' : 'tracks'} · ${fmtBytes(u.used)} · ${u.drive ? 'Google Drive' : 'Drive not connected'}`))),
+          // the owner can act on anyone but themselves; other admins only on people who aren't admins
+          u.id !== 'owner' && (S.me.owner || !u.is_admin) && h('span', { className: 'btns', style: { margin: 0 } },
+            S.me.owner && h('button', { className: 'btn', async onclick() {
+              if (!u.is_admin && !(await confirm(`Make ${nameOf(u)} an admin?`, 'Admins can see Analytics, People and Bug reports, and can turn off, reset or delete accounts that aren\'t admins. They can\'t see anyone\'s files.', 'Make admin'))) return;
+              if (await api(`/admin/users/${u.id}`, { method: 'PATCH', body: { is_admin: !u.is_admin } }).then(() => true, oops)) { toast(u.is_admin ? `${nameOf(u)} is no longer an admin` : `${nameOf(u)} is now an admin`); draw(); }
+            } }, u.is_admin ? 'Remove admin' : 'Make admin'),
             h('button', { className: 'btn', async onclick() {
               if (!(await confirm(`Reset ${u.username}'s password?`, 'You get a temporary password to send them. Their devices are logged out; they can change it in Settings → Account.', 'Reset'))) return;
               const r = await api(`/admin/users/${u.id}/reset`, { method: 'POST' }).catch(oops);
@@ -2820,6 +2868,95 @@ async function shortcutDialog() {
       h('small', { className: 'muted' }, 'Want a different project? Add ', h('code', {}, '&project=Your Project Name'), ' to the URL. Too many wrong keys locks uploads for 15 minutes.'));
   }
   draw();
+}
+
+// ---- playlists --------------------------------------------------------------------------------
+// Tracks from any of your projects (and ones shared with you), in your own order. The songs stay where they are.
+function playlistArt(pl) {
+  const covers = [...new Set(pl.ids.map(trackOf).filter(Boolean).map(coverOf).filter(Boolean))];
+  return covers.length >= 4 ? h('div', { className: 'art pl-art' }, covers.slice(0, 4).map(c => h('i', { style: bg(c) })))
+    : h('div', { className: 'art' + (covers[0] ? '' : ' disc'), style: bg(covers[0]) });
+}
+async function newPlaylist(tracks = []) {
+  const name = await prompt('New playlist', '', { label: 'Name', ok: 'Create', max: 120 });
+  if (!name) return null;
+  const r = await api('/playlists', { method: 'POST', body: { name, track_ids: tracks.map(t => t.id) } }).catch(oops);
+  if (!r) return null;
+  await load();
+  if (!tracks.length) setView({ type: 'playlist', id: r.id });
+  else toast(`Made “${name}” with ${tracks.length} ${tracks.length === 1 ? 'track' : 'tracks'}`, { ms: 4000, action: { label: 'Open', run: () => setView({ type: 'playlist', id: r.id }) } });
+  return r.id;
+}
+// Pick a playlist (or make one) for these tracks. True once they're added.
+function addToPlaylist(tracks) {
+  if (!S.playlists.length) return newPlaylist(tracks).then(Boolean);
+  return new Promise(res => {
+    let done = false;
+    const pick = async pl => {
+      const fresh = tracks.filter(t => !pl.ids.includes(t.id));
+      done = true; d.close();
+      if (!fresh.length) { toast(`Already in “${pl.name}”`, { quiet: true }); return res(true); }
+      const r = await api(`/playlists/${pl.id}/tracks`, { method: 'POST', body: { ids: fresh.map(t => t.id) } }).catch(oops);
+      if (r) { await load(); toast(`Added ${r.added} to “${pl.name}”`, { ms: 4000, action: { label: 'Open', run: () => setView({ type: 'playlist', id: pl.id }) } }); }
+      res(!!r);
+    };
+    const d = dialog(h('div', { className: 'stack' }, h('h2', {}, tracks.length === 1 ? `Add “${tracks[0].name}” to…` : `Add ${tracks.length} tracks to…`),
+      h('div', { className: 'list' }, S.playlists.map(pl => h('button', { type: 'button', className: 'item pick-pl', onclick: () => pick(pl) },
+        icon('queue', 16), h('span', { className: 'grow' }, pl.name), h('small', { className: 'muted' }, `${pl.ids.filter(trackOf).length} tracks`)))),
+      h('div', { className: 'btns' },
+        h('button', { type: 'button', className: 'btn', style: { marginRight: 'auto' }, onclick: async () => { done = true; d.close(); res(!!(await newPlaylist(tracks))); } }, icon('plus', 15), 'New playlist'),
+        h('button', { type: 'button', className: 'btn ghost', onclick: () => d.close() }, 'Cancel'))), { className: 'settings-dlg' });
+    d.addEventListener('close', () => { if (!done) res(false); });
+  });
+}
+function playlistMenu(pl) {
+  const tracks = () => pl.ids.map(trackOf).filter(Boolean);
+  sheet([
+    { icon: 'pencil', label: 'Rename', async run() { const name = await prompt('Rename playlist', pl.name, { max: 120 }); name && api(`/playlists/${pl.id}`, { method: 'PATCH', body: { name } }).then(load, oops); } },
+    { icon: 'download', label: 'Save all offline', run: () => saveAllOffline(tracks()) },
+    '-',
+    { icon: 'trash', label: 'Delete playlist', danger: true, async run() {
+      if (!(await confirm(`Delete “${pl.name}”?`, 'Only the playlist goes. The songs stay in their projects.', 'Delete'))) return;
+      if (await api(`/playlists/${pl.id}`, { method: 'DELETE' }).then(() => true, oops)) { setView({ type: 'home' }); load(); }
+    } },
+  ]);
+}
+
+// ---- admin: analytics ----------------------------------------------------------------------------
+async function analyticsDialog() {
+  const body = h('div', { className: 'stack' }, h('div', { className: 'muted' }, 'Adding it up…'));
+  const d = dialog(h('div', { className: 'stack analytics' }, h('h2', {}, 'Analytics'), body,
+    h('div', { className: 'btns' }, h('button', { className: 'btn primary', onclick: () => d.close() }, 'Done'))), { className: 'settings-dlg wide' });
+  const a = await api('/admin/analytics').catch(e => (oops(e), null));
+  if (!a) return d.close();
+  const t = a.totals, n = x => Number(x || 0).toLocaleString();
+  const tile = (label, value, sub) => h('div', { className: 'an-tile' }, h('span', { className: 'mono' }, label), h('b', { className: 'num' }, value), sub && h('small', {}, sub));
+  const day = ts => new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  // one series per chart, so one colour (the accent) and no legend; each bar says its day and number on hover / focus
+  const bars = (title, days, unit) => {
+    const max = Math.max(1, ...days.map(x => x.n)), total = days.reduce((s, x) => s + x.n, 0);
+    return h('div', { className: 'an-chart' },
+      h('div', { className: 'an-h' }, h('b', {}, title), h('span', { className: 'mono' }, `${n(total)} in 30 days`)),
+      h('div', { className: 'an-bars', role: 'img', 'aria-label': `${title}: ${total} in the last 30 days` },
+        days.map((x, i) => h('span', { className: 'an-bar' + (i < 4 ? ' l' : i > 25 ? ' r' : ''), tabIndex: 0, 'data-tip': `${day(x.day)} · ${x.n} ${x.n === 1 ? unit : unit + 's'}` },
+          h('i', { className: x.n ? '' : 'zero', style: { height: (x.n / max) * 100 + '%' } })))),
+      h('div', { className: 'an-axis mono' }, h('span', {}, day(days[0].day)), h('span', {}, 'today')));
+  };
+  fill(body,
+    h('div', { className: 'an-tiles' },
+      tile('[people]', n(t.users), `${n(t.new7)} new this week`),
+      tile('[active · 7 days]', n(t.active7), `${n(t.active30)} in 30 days`),
+      tile('[tracks]', n(t.tracks), `${n(t.projects)} projects`),
+      tile('[storage]', fmtBytes(t.bytes), 'all versions, all accounts'),
+      tile('[share links]', n(t.links), `${n(t.listens)} plays · ${n(t.comments)} comments`),
+      tile('[playlists]', n(t.playlists), `${n(t.bugs)} open bug ${t.bugs === 1 ? 'report' : 'reports'}`)),
+    bars('New accounts', a.signups, 'sign-up'),
+    bars('Plays on share links', a.plays, 'play'),
+    h('div', { className: 'field' }, h('span', { className: 'field-l' }, 'Most tracks'),
+      h('div', { className: 'list' }, a.top.map(u => h('div', { className: 'item' }, avatarEl(u),
+        h('span', { className: 'grow' }, nameOf(u), h('small', { className: 'muted' }, ` @${u.username}`)),
+        h('small', { className: 'mono an-top' }, `${n(u.tracks)} tracks · ${fmtBytes(u.bytes)} · ${u.last_seen ? 'seen ' + fmtAdded(u.last_seen).toLowerCase() : 'not seen yet'}`))))),
+    h('small', { className: 'muted' }, 'Active = opened [vault] (counted at most every 10 minutes). Plays count share-link listens, not plays inside the app.'));
 }
 
 // ---- bug reports ------------------------------------------------------------------------------
@@ -2981,6 +3118,7 @@ function renderBulk() {
       if (await bulk({ ids: [...S.select], set: { artist: name } })) done();
     }),
     act('gauge', 'Detect', () => detectTracks(picked(), true)),
+    act('plus', 'Playlist', async () => { if (await addToPlaylist(picked())) done(); }),
     act('download', 'ZIP', () => zipTracks(picked(), 'Selected tracks')),
     act('trash', 'Delete', async () => {
       const ids = [...S.select];
@@ -3001,7 +3139,25 @@ function projectPicker(title) {
 }
 
 // ---- filters --------------------------------------------------------------------------------
-function blankFilter() { return { bpmMin: '', bpmMax: '', key: '', mode: '', tag: '', throw: '' }; }
+function blankFilter() { return { bpmMin: '', bpmMax: '', key: '', mode: '', tag: '', throw: '', star: '', added: '' }; }
+// Comments live on the server: a moment after typing stops, ask which tracks have a comment that matches.
+let searchTimer = 0;
+function searchComments() {
+  clearTimeout(searchTimer);
+  const q = S.q.trim();
+  if (q.length < 2 || !S.online) { if (S.commentHits.size) { S.commentHits = new Map(); renderList(); } return; }
+  searchTimer = setTimeout(async () => {
+    const r = await api('/search?q=' + encodeURIComponent(q)).catch(() => null);
+    if (!r || S.q.trim() !== q) return;
+    S.commentHits = new Map(); for (const c of r.comments) if (!S.commentHits.has(c.track_id)) S.commentHits.set(c.track_id, c);
+    renderList();
+  }, 250);
+}
+// While searching: choose where to look.
+const SEARCH_IN = [['all', 'Everything'], ['title', 'Titles'], ['notes', 'Notes'], ['tags', 'Tags'], ['producer', 'Producer'], ['comments', 'Comments']];
+const searchChips = () => S.q.trim() && h('div', { className: 'chips-row search-in', role: 'radiogroup', 'aria-label': 'Search in' },
+  h('span', { className: 'mono' }, '[search in]'),
+  SEARCH_IN.map(([v, l]) => h('button', { className: 'chip' + (S.searchIn === v ? ' on' : ''), role: 'radio', 'aria-checked': S.searchIn === v, onclick() { S.searchIn = v; renderList(); } }, l)));
 function filterDialog() {
   const f = { ...S.filter };
   const num = (k, ph) => h('input', { type: 'number', min: 40, max: 250, step: 1, value: f[k], placeholder: ph, inputMode: 'numeric', oninput() { f[k] = this.value; } });
@@ -3014,12 +3170,17 @@ function filterDialog() {
   const drawThr = () => fill(thr, [['', 'Show'], ['hide', 'Hide'], ['only', 'Only these']].map(([v, l]) =>
     h('button', { type: 'button', className: 'btn' + (f.throw === v ? ' on' : ''), role: 'radio', 'aria-checked': f.throw === v, onclick() { f.throw = v; drawThr(); } }, l)));
   drawThr();
+  const segs = (key, opts) => { const box = h('div', { className: 'seg-row', role: 'radiogroup' }); const draw = () => fill(box, opts.map(([v, l]) =>
+    h('button', { type: 'button', className: 'btn' + (String(f[key]) === String(v) ? ' on' : ''), role: 'radio', 'aria-checked': String(f[key]) === String(v), onclick() { f[key] = v; draw(); } }, l))); draw(); return box; };
+  const field = (label, el) => h('div', { className: 'field' }, h('span', { className: 'field-l' }, label), el);
   const d = dialog(h('form', { onsubmit(e) { e.preventDefault(); S.filter = f; d.close(); renderMain(); } },
     h('h2', {}, 'Filter'),
     h('div', { className: 'row2' }, h('label', {}, 'BPM from', num('bpmMin', '120')), h('label', {}, 'BPM to', num('bpmMax', '160'))),
     h('label', {}, 'Key', h('select', { onchange() { f.key = this.value; } }, h('option', { value: '' }, 'Any key'), KEYS.map(k => h('option', { value: k, selected: f.key === k }, k)))),
-    h('label', {}, 'Major / minor', mode),
-    h('label', {}, 'Throwaways', thr),
+    field('Major / minor', mode),
+    field('Starred', segs('star', [['', 'Any'], ['1', 'Starred only']])),
+    field('Throwaways', thr),
+    field('Added', segs('added', [['', 'Any time'], ['7', 'Past week'], ['30', 'Past month'], ['90', 'Past 3 months']])),
     allTags.length > 0 && h('label', {}, 'Tag', h('select', { onchange() { f.tag = this.value; } }, h('option', { value: '' }, 'Any tag'), allTags.map(t => h('option', { value: t, selected: f.tag === t }, t)))),
     h('div', { className: 'btns' },
       h('button', { type: 'button', className: 'btn ghost', style: { marginRight: 'auto' }, onclick() { S.filter = blankFilter(); d.close(); renderMain(); } }, 'Clear all'),
