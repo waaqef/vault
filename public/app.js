@@ -10,13 +10,22 @@ const $ = (s, el = document) => el.querySelector(s);
 function h(tag, attrs = {}, ...kids) {
   const el = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
-    if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+    if (k === 'onsubmit') el.addEventListener('submit', sendOnce(el, v));
+    else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
     else if (k === 'style' && typeof v === 'object') for (const [p, x] of Object.entries(v)) p.startsWith('--') ? el.style.setProperty(p, x) : (el.style[p] = x);
     else if (k in el && k !== 'list') el[k] = v;
     else if (v != null && v !== false) el.setAttribute(k, v === true ? '' : v);
   }
   return fill(el, ...kids), el;
 }
+// Forms: while one is being sent its buttons are switched off, so a double tap can't send it twice.
+const sendOnce = (form, send) => async function (e) {
+  if (form.busy) return e.preventDefault();
+  form.busy = true;
+  const btns = [...form.querySelectorAll('button:not([type=button])')].filter(b => !b.disabled);
+  btns.forEach(b => { b.disabled = true; });
+  try { await send.call(form, e); } finally { form.busy = false; btns.forEach(b => { b.disabled = false; }); }
+};
 // Like replaceChildren, but accepts nested arrays and skips null/false (for `cond && el`).
 function fill(el, ...kids) { el.replaceChildren(...kids.flat(9).filter(k => k != null && k !== false)); }
 const fmtTime = s => (s == null || !isFinite(s) ? '–' : `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`);
@@ -44,14 +53,28 @@ const coverOf = t => t.cover || projectOf(t.project_id)?.cover;
 const syncRange = r => r.style.setProperty('--p', ((r.value - r.min) / (r.max - r.min)) * 100 + '%');
 
 export async function api(path, { method = 'GET', body } = {}) {
-  const r = await fetch('/api' + path, {
-    method, headers: body ? { 'content-type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined,
-  });
+  let r;
+  try {
+    r = await fetch('/api' + path, {
+      method, headers: body ? { 'content-type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined,
+    });
+  } catch {
+    // no connection (a TypeError on purpose: that's how load() tells "offline" from a real error)
+    throw Object.assign(new TypeError("Can't reach [vault]. Check your connection and try again."), { fromApi: true });
+  }
   const d = await r.json().catch(() => ({}));
   if (r.status === 401 && path !== '/login' && path !== '/signup') { showLogin(); throw new Error('Not logged in'); }
-  if (!r.ok) throw new Error(d.error || `Request failed (${r.status})`);
+  if (!r.ok) throw Object.assign(new Error(plainError(r.status, d.error)), { fromApi: true, status: r.status });
   return d;
 }
+// What to tell someone when a request fails: the server's own words when it has some, never a bare status code.
+const plainError = (status, said) => (said && said !== 'Not found' ? said
+  : status === 404 ? "That isn't there any more, or you no longer have access to it."
+    : status === 429 ? 'Too many tries. Wait a minute, then try again.'
+      : status >= 500 ? "Something went wrong on [vault]'s side. Try again in a moment."
+        : "That didn't work. Try again.");
+// Nothing fails silently: a request that went wrong and wasn't handled where it was made still says so.
+addEventListener('unhandledrejection', e => { if (e.reason?.fromApi) { e.preventDefault(); oops(e.reason); } });
 
 export function toast(msg, { error = false, ms = 3500, action, quiet = false } = {}) {
   const el = h('div', { className: 'toast' + (error ? ' error' : '') + (action ? ' has-action' : '') + (quiet ? ' quiet' : '') }, h('span', {}, msg),
@@ -113,12 +136,16 @@ function confirm(title, text, ok = 'Delete', cancel = 'Cancel') {
   });
 }
 function sheet(items) {
-  const d = dialog(h('div', {}, items.filter(Boolean).map((it, i) => it === '-' ? h('hr', { style: { '--i': i } }) : h('button', { className: it.danger ? 'danger' : '', style: { '--i': i }, onclick: () => { d.close(); it.run(); } }, it.icon && icon(it.icon), it.label))), { className: 'sheet' });
+  const list = []; // dividers only between groups that have something in them
+  for (const it of items.filter(Boolean)) if (it !== '-' || (list.length && list[list.length - 1] !== '-')) list.push(it);
+  if (list[list.length - 1] === '-') list.pop();
+  const d = dialog(h('div', {}, list.map((it, i) => it === '-' ? h('hr', { style: { '--i': i } }) : h('button', { className: it.danger ? 'danger' : '', style: { '--i': i }, onclick: () => { d.close(); it.run(); } }, it.icon && icon(it.icon), it.label))), { className: 'sheet' });
 }
 function pickFiles(accept, multiple = true) {
   return new Promise(res => {
     const i = h('input', { type: 'file', accept, multiple });
     i.onchange = () => res([...i.files]);
+    i.oncancel = () => res([]);
     i.click();
   });
 }
@@ -189,6 +216,7 @@ function driveBack() {
 
 function showLogin() {
   if ($('#login')) return;
+  $('.empty.boot')?.remove(); // nothing is loading behind the sign-in box
   const box = h('div', { id: 'login', className: 'login' });
   const d = dialog(box, { locked: true });
   const head = h('div', { className: 'disc', style: { width: '56px', height: '56px', justifySelf: 'center', animation: 'spin 14s linear infinite' } });
@@ -425,6 +453,7 @@ function tintFrom(key) {
 }
 
 
+const whyOff = ro => (!S.online ? "You're offline. Uploading and recording need a connection." : ro ? 'You can listen to this project, not add to it' : null);
 function renderMain() {
   tintFrom(S.view.type === 'project' ? projectOf(S.view.id)?.cover || null : null);
   const main = $('#main');
@@ -449,8 +478,8 @@ function renderMain() {
       [['manual', 'Custom'], ['newest', 'Newest'], ['oldest', 'Oldest'], ['name', 'Name'], ['bpm', 'BPM'], ['key', 'Key'], ['length', 'Length']]
         .filter(([v]) => p || v !== 'manual').map(([v, l]) => h('option', { value: v, selected: effSort() === v }, l))),
     h('span', { className: 'grow' }),
-    h('button', { className: 'btn', onclick: recordDialog, disabled: !S.online || ro, 'aria-label': 'Record' }, icon('mic', 16), h('span', { className: 'lbl' }, 'Record')),
-    h('button', { className: 'btn primary', disabled: !S.online || ro, title: ro ? 'You can listen to this project, not add to it' : null, async onclick() { const f = await pickFiles(ACCEPT_AUDIO); f.length && uploadTracks(f, await targetProject()); }, 'aria-label': 'Upload' }, icon('upload', 16), h('span', { className: 'lbl' }, 'Upload')),
+    h('button', { className: 'btn', onclick: recordDialog, disabled: !S.online || ro, title: whyOff(ro), 'aria-label': 'Record' }, icon('mic', 16), h('span', { className: 'lbl' }, 'Record')),
+    h('button', { className: 'btn primary', disabled: !S.online || ro, title: whyOff(ro), async onclick() { const f = await pickFiles(ACCEPT_AUDIO); f.length && uploadTracks(f, await targetProject()); }, 'aria-label': 'Upload' }, icon('upload', 16), h('span', { className: 'lbl' }, 'Upload')),
   );
 
   if (S.view.type === 'home') return renderHome(toolbar);
@@ -683,11 +712,16 @@ function renderList(animate = false) {
   box.classList.toggle('selecting', !!S.select);
   if (animate) { void box.offsetWidth; box.classList.add('stagger'); }
   if (!list.length) {
-    const filtered = S.q || filterCount();
+    const filtered = S.q || filterCount(), touch = matchMedia('(pointer: coarse)').matches;
+    const [title, text] = filtered ? ['No matches', 'Try a different search, or clear the filters.']
+      : S.view.type === 'starred' ? ['No starred tracks yet', 'Tap the star on a track and it shows up here.']
+        : S.view.type === 'offline' ? ['Nothing downloaded yet', 'Use ⋯ → Save offline on a track or a project to play it without a connection.']
+          : p && !canEdit(S.view.id) ? ['No tracks yet', 'Nothing has been added to this project.']
+            : ['Nothing here yet', touch ? 'Tap Upload to add your first tracks.' : 'Drag audio files or folders here, or press Upload.'];
     box.replaceChildren(h('div', { className: 'empty' },
       h('span', { className: 'disc' }),
-      h('b', {}, filtered ? 'No matches' : 'Nothing here yet'),
-      filtered ? 'Try a different search, or clear the filters.' : 'Drag audio files or folders here, or press Upload.',
+      h('b', {}, title),
+      text,
       filterCount() > 0 && h('button', { className: 'btn', style: { marginTop: '10px' }, onclick: () => { S.filter = blankFilter(); renderMain(); } }, 'Clear filters')));
     return;
   }
@@ -899,8 +933,8 @@ function sideDragStart(e, kind, item, el) {
     const current = kind === 'folder' ? item.parent_id || null : item.folder_id || null;
     if (to === current) return;
     if (to) { S.open.add(to); store.set('open', [...S.open]); }
-    await api(`/${kind === 'folder' ? 'folders' : 'projects'}/${item.id}`, { method: 'PATCH', body: kind === 'folder' ? { parent_id: to } : { folder_id: to } }).catch(oops);
-    toast(`Moved “${item.name}” ${to ? 'into ' + (S.folders.find(f => f.id === to)?.name || 'folder') : 'to the top level'}`, { ms: 2000 });
+    const moved = await api(`/${kind === 'folder' ? 'folders' : 'projects'}/${item.id}`, { method: 'PATCH', body: kind === 'folder' ? { parent_id: to } : { folder_id: to } }).then(() => true, oops);
+    if (moved) toast(`Moved “${item.name}” ${to ? 'into ' + (S.folders.find(f => f.id === to)?.name || 'folder') : 'to the top level'}`, { ms: 2000 });
     load();
   };
   if (touch) st.timer = setTimeout(() => { if (sideDrag === st) begin(); }, 380);
@@ -1008,8 +1042,8 @@ function projectMenu(p) {
       ed && { icon: 'pencil', label: 'Rename', async run() { const name = await prompt('Rename project', p.name); name && api(`/projects/${p.id}`, { method: 'PATCH', body: { name } }).then(load, oops); } },
       ed && { icon: 'image', label: 'Change cover', run: () => setCover('projects', p) },
       ed && { icon: 'gauge', label: 'Detect missing BPM & keys', run: () => detectTracks(tracks().filter(t => !t.bpm || !t.musical_key), false) },
-      ed && { icon: 'download', label: 'Download as ZIP', run: () => zipTracks(tracks(), p.name, p.cover) },
-      { icon: 'download', label: 'Save all offline', run: () => tracks().forEach(saveOffline) },
+      ed && { icon: 'download', label: 'Export as ZIP', run: () => zipTracks(tracks(), p.name, p.cover) },
+      { icon: 'download', label: 'Save all offline', run: () => saveAllOffline(tracks()) },
       p.member && { icon: 'clock', label: 'Activity', run: () => activityDialog(p) },
       '-',
       { icon: 'close', label: 'Remove from my library', danger: true, async run() {
@@ -1025,8 +1059,8 @@ function projectMenu(p) {
     { icon: 'image', label: 'Change cover', run: () => setCover('projects', p) },
     p.cover && { icon: 'close', label: 'Remove cover', run: () => api(`/projects/${p.id}`, { method: 'PATCH', body: { cover: null } }).then(load, oops) },
     { icon: 'gauge', label: 'Detect missing BPM & keys', run: () => detectTracks(tracks().filter(t => !t.bpm || !t.musical_key), false) },
-    { icon: 'download', label: 'Download as ZIP', run: () => zipTracks(tracks(), p.name, p.cover) },
-    { icon: 'download', label: 'Save all offline', run: () => tracks().forEach(saveOffline) },
+    { icon: 'download', label: 'Export as ZIP', run: () => zipTracks(tracks(), p.name, p.cover) },
+    { icon: 'download', label: 'Save all offline', run: () => saveAllOffline(tracks()) },
     { icon: 'clock', label: 'Activity', run: () => activityDialog(p) },
     '-',
     { icon: 'trash', label: 'Move to trash', danger: true, async run() {
@@ -1382,20 +1416,25 @@ async function handleDrop(dt, projectId) {
   for (const en of entries) en.isDirectory ? folders.push({ name: en.name, files: await walk(en) }) : loose.push(await fileOf(en));
   if (!entries.length) loose.push(...dt.files);
   const waits = [];
-  if (loose.length) {
-    const images = loose.filter(f => kindOf(f.name) === 'cover');
-    const rest = loose.filter(f => kindOf(f.name) !== 'cover');
-    const pid = projectId || await targetProject();
-    if (images.length && !rest.length) return setCover('projects', projectOf(pid), images[0]);
-    waits.push(uploadTracks(rest, pid));
-  }
-  const folderId = S.view.type === 'project' ? projectOf(S.view.id)?.folder_id || null : null;
-  for (const f of folders) {
-    const { id } = await api('/projects', { method: 'POST', body: { name: f.name, folder_id: folderId } });
-    const art = f.files.find(x => kindOf(x.name) === 'cover');
-    // Everything else (including other images, docs, etc.) goes in the queue; non-audio shows up as "skipped".
-    waits.push(uploadTracks(f.files.filter(x => x !== art), id, f.name).then(() => art && setCover('projects', { id }, art)));
-  }
+  try {
+    if (loose.length) {
+      const images = loose.filter(f => kindOf(f.name) === 'cover');
+      const rest = loose.filter(f => kindOf(f.name) !== 'cover');
+      if (images.length && !rest.length) {
+        // an image on its own is a cover, and only for the project it was dropped on (never a guess)
+        if (!into) return toast('To set a cover, open the project first and drop the image there.', { ms: 5000 });
+        return setCover('projects', projectOf(into), images[0]);
+      }
+      waits.push(uploadTracks(rest, projectId || await targetProject()));
+    }
+    const folderId = S.view.type === 'project' ? projectOf(S.view.id)?.folder_id || null : null;
+    for (const f of folders) {
+      const { id } = await api('/projects', { method: 'POST', body: { name: f.name, folder_id: folderId } });
+      const art = f.files.find(x => kindOf(x.name) === 'cover');
+      // Everything else (including other images, docs, etc.) goes in the queue; non-audio shows up as "skipped".
+      waits.push(uploadTracks(f.files.filter(x => x !== art), id, f.name).then(() => art && setCover('projects', { id }, art)));
+    }
+  } catch (e) { oops(e); }
   await Promise.all(waits);
 }
 
@@ -1413,15 +1452,19 @@ function trackMenu(t, list) {
     { icon: 'queue', label: 'Add to queue', run: () => addToQueue(t) },
     '-',
     ed && { icon: 'sliders', label: 'Edit audio', run: () => openEditor(t) },
+    ed && { icon: 'upload', label: 'Replace with a new version', run: () => replaceAudio(t) },
     ed && { icon: 'info', label: 'Details, notes & versions', run: () => detailsDialog(t) },
-    canComment(t.project_id) && { icon: 'comment', label: 'Comments', run: () => commentsDialog(t) },
     ed && { icon: 'gauge', label: 'Detect BPM & key', run: () => detectTracks([t], true) },
+    '-',
+    canComment(t.project_id) && { icon: 'comment', label: 'Comments', run: () => commentsDialog(t) },
     own && { icon: 'share', label: 'Share', run: () => shareDialog('track', t.id, t.name) },
-    isOffline(t) ? { icon: 'close', label: 'Remove download', run: () => removeOffline(t) } : { icon: 'download', label: 'Save offline', run: () => saveOffline(t) },
-    ed && { icon: 'download', label: 'Download file', run: () => downloadTrack(t) },
+    '-',
+    isOffline(t) ? { icon: 'close', label: 'Remove from this device', run: () => removeOffline(t) } : { icon: 'download', label: 'Save offline', run: () => saveOffline(t) },
+    ed && { icon: 'download', label: 'Export file', run: () => exportTrack(t) },
+    '-',
     ed && manual && i > 0 && { icon: 'up', label: 'Move up', run: () => move(-1) },
     ed && manual && i < list.length - 1 && { icon: 'down', label: 'Move down', run: () => move(1) },
-    ed && '-',
+    '-',
     ed && { icon: 'trash', label: 'Move to trash', danger: true, async run() {
       if (!(await api(`/tracks/${t.id}`, { method: 'DELETE' }).then(() => true, oops))) return;
       load();
@@ -1548,11 +1591,11 @@ async function detectTracks(list, overwrite) {
 
 async function detailsDialog(t) {
   if (!canEdit(t.project_id)) return toast('This project is listen-only for you', { quiet: true });
-  const name = h('input', { type: 'text', value: t.name, required: true });
-  const artist = h('input', { type: 'text', value: t.artist || '', placeholder: settings.artist || 'e.g. ssixr', maxLength: 120 });
+  const name = h('input', { type: 'text', value: t.name, required: true, maxLength: 300 });
+  const artist = h('input', { type: 'text', value: t.artist || '', placeholder: settings.artist || 'Who made it', maxLength: 120 });
   const bpm = h('input', { type: 'number', min: 20, max: 400, step: 0.1, value: t.bpm ?? '', placeholder: '—' });
   const key = h('select', {}, h('option', { value: '' }, '—'), KEYS.map(k => h('option', { value: k, selected: t.musical_key === k }, k)));
-  const tags = h('input', { type: 'text', value: t.tags || '', placeholder: 'dark, trap, sent to Mike' });
+  const tags = h('input', { type: 'text', value: t.tags || '', placeholder: 'dark, trap, sent to Mike', maxLength: 500 });
   const own = !isShared(t.project_id); // a shared track stays in its project
   const proj = own && h('select', {}, S.projects.map(p => h('option', { value: p.id, selected: p.id === t.project_id }, p.name)));
   const notes = h('textarea', { rows: 5, value: t.notes || '', placeholder: 'Lyrics, ideas, who you sent it to…', maxLength: 20000 });
@@ -1581,7 +1624,8 @@ async function detailsDialog(t) {
     h('button', { type: 'button', className: 'btn', onclick: () => { d.close(); setCover('tracks', t); } }, t.cover ? 'Change cover' : 'Add cover'),
     t.cover && h('button', { type: 'button', className: 'btn ghost', onclick: () => { d.close(); api(`/tracks/${t.id}`, { method: 'PATCH', body: { cover: null } }).then(load, oops); } }, 'Remove cover')),
   h('div', { className: 'field' }, h('span', { className: 'field-l' }, 'Comments'), comments),
-  h('div', { className: 'field' }, h('span', { className: 'field-l' }, 'Versions'), versions), // not a <label>: that would click the first button inside
+  h('div', { className: 'field' }, h('span', { className: 'field-l' }, 'Versions'), versions, // not a <label>: that would click the first button inside
+    h('button', { type: 'button', className: 'btn', style: { justifySelf: 'start' }, disabled: !S.online, onclick: () => { d.close(); replaceAudio(t); } }, icon('upload', 15), 'Upload a new version')),
   h('div', { className: 'btns' }, h('button', { type: 'button', className: 'btn ghost', onclick: () => d.close() }, 'Cancel'), h('button', { className: 'btn primary' }, 'Save'))));
 
   api(`/tracks/${t.id}/comments`).then(list => fill(comments, list.length ? list.map(cm => h('div', { className: 'item comment' },
@@ -1643,13 +1687,36 @@ async function cleanVersions(track_id) {
   return true;
 }
 
-async function downloadTrack(t) {
+// Export: saves the track's current file to this device (Downloads, or the share sheet in the iPhone app).
+async function exportTrack(t) {
+  const note = toast(`Getting “${t.name}” ready…`, { ms: 0 });
   try {
     const blob = await audioBlob(t);
-    const a = h('a', { href: URL.createObjectURL(blob), download: t.name + extFromType(blob.type) });
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+    saveBlob(blob, safeName(t.name) + extFromType(blob.type));
   } catch (e) { oops(e); }
+  note.remove();
+}
+// Replace a track's audio with a new file (a new bounce, a fixed mix). Its name, notes, comments and share links stay;
+// the file it had is kept under Versions, so you can switch back.
+async function replaceAudio(t) {
+  if (!canEdit(t.project_id)) return toast('This project is listen-only for you', { quiet: true });
+  if (!S.online) return toast('Replacing a file needs a connection', { error: true });
+  const [file] = splitAccepted(await pickFiles(ACCEPT_AUDIO, false), 'audio');
+  if (!file) return;
+  const note = toast(`Uploading the new version of “${t.name}”…`, { ms: 0 });
+  const say = text => { note.firstChild.textContent = text; };
+  try {
+    const duration = await durationOf(file);
+    const analysing = analyse(file, file.name, false);
+    const file_key = await uploadFile(file, p => say(`Uploading the new version of “${t.name}”… ${Math.round(p * 100)}%`), t.project_id);
+    say('Saving…');
+    const { peaks } = await analysing;
+    await api(`/tracks/${t.id}/versions`, { method: 'POST', body: { file_key, duration, peaks, note: `New file: ${file.name}`.slice(0, 300) } });
+    toast(`“${t.name}” now plays the new file. The one before is kept under Versions.`, { ms: 6000 });
+    // the playing track switches to the new file at the same spot
+    if (cur?.id === t.id) await editorClosed(t, { at: audio.currentTime, playing: !audio.paused, saved: true }); else await load();
+  } catch (e) { if (e.message !== 'Cancelled') oops(e); }
+  note.remove();
 }
 const extFromType = type => (extForType(type) ? '.' + extForType(type) : '');
 
@@ -1657,18 +1724,35 @@ const extFromType = type => (extForType(type) ? '.' + extForType(type) : '');
 // Downloaded tracks live in the Cache API, keyed by file version so edits don't serve stale audio.
 const offKey = t => `/offline/${t.file_key}`;
 function isOffline(t) { return S.offline.has(t.file_key); }
-async function saveOffline(t) {
-  const note = toast(`Saving ${t.name} offline…`, { ms: 0 });
+// many = part of "Save all offline", which shows one progress note for the lot. True when it's saved.
+async function saveOffline(t, many = false) {
+  const note = !many && toast(`Saving “${t.name}” offline…`, { ms: 0 });
+  let ok = false;
   try {
     const { url } = await api(`/audio/${t.id}?json=1`);
     const r = await fetch(url);
-    if (!r.ok) throw new Error('Download failed');
+    if (!r.ok) throw new Error('not saved');
     await (await caches.open('audio')).put(offKey(t), r);
     S.offline.add(t.file_key); store.set('offline', [...S.offline]);
     navigator.storage?.persist?.();
-    renderSide(); renderList();
-  } catch (e) { oops(e); }
-  note.remove();
+    ok = true;
+    if (!many) { renderSide(); renderList(); toast(`“${t.name}” is saved for offline listening`, { ms: 2500 }); }
+  } catch (e) { if (!many) oops(e.fromApi ? e : new Error(`Couldn't save “${t.name}” offline. Check your connection (and this device's free space), then try again.`)); }
+  if (note) note.remove();
+  return ok;
+}
+async function saveAllOffline(list) {
+  const todo = list.filter(t => !isOffline(t));
+  if (!todo.length) return toast(list.length ? 'Everything here is already saved offline' : 'There are no tracks to save yet');
+  const note = toast('', { ms: 0 });
+  let saved = 0;
+  for (const [i, t] of todo.entries()) {
+    note.firstChild.textContent = `Saving offline… ${i + 1} of ${todo.length}`;
+    if (await saveOffline(t, true)) saved++;
+  }
+  note.remove(); renderSide(); renderList();
+  toast(saved === todo.length ? `Saved ${saved} ${saved === 1 ? 'track' : 'tracks'} for offline listening`
+    : `Saved ${saved} of ${todo.length}. Check your connection, then try again for the rest.`, { error: saved < todo.length, ms: 5000 });
 }
 async function removeOffline(t) {
   await (await caches.open('audio')).delete(offKey(t));
@@ -1764,24 +1848,47 @@ async function playAt(i, { remember = true } = {}) {
   // The editor opened while this was downloading: load it but don't start, or it'd play on top of the editor.
   if (editorOpen) audio.pause(); else audio.play().catch(() => {});
   renderPlayer(); markPlaying();
-  if ('mediaSession' in navigator) {
-    const t = cur, art = coverOf(t), meta = artwork => new MediaMetadata({ title: t.name, artist: t.artist || projectOf(t.project_id)?.name || '', artwork });
-    navigator.mediaSession.metadata = meta([]);
-    lockScreenArt(art).then(a => { if (cur === t && a.length) navigator.mediaSession.metadata = meta(a); });
-  }
+  nowPlaying();
 }
-// Lock screen / Now Playing cover. The phone fetches artwork itself, without the login cookie, so a protected cover URL
-// fails and it shows the app icon. Instead the page loads the cover (logged in) and hands over a small copy as a data URL.
-const artCache = new Map();
+// Lock screen / Now Playing: title, cover and the previous / next buttons.
+function nowPlaying() {
+  if (!cur || !('mediaSession' in navigator)) return;
+  const t = cur, key = coverOf(t), meta = artwork => new MediaMetadata({ title: t.name, artist: t.artist || projectOf(t.project_id)?.name || '', album: projectOf(t.project_id)?.name || '', artwork });
+  navigator.mediaSession.metadata = meta(artReady.get(key) || []); // straight away when the cover is already made
+  if (key && !artReady.has(key)) lockScreenArt(key).then(a => { if (cur === t && a.length) navigator.mediaSession.metadata = meta(a); });
+  // get the next song's cover ready now: by the time it starts, the phone may be locked
+  const next = upNext();
+  if (next) lockScreenArt(coverOf(next));
+  mediaControls();
+}
+// The phone fetches artwork itself, without the login cookie, so a protected cover URL fails and it shows the app icon.
+// Instead the page loads the cover (logged in) and hands over a small copy as a data URL. A cover that failed to load
+// (a blip in the connection) is tried again the next time, not remembered as "no cover".
+const artCache = new Map(), artReady = new Map();
 function lockScreenArt(key) {
   if (!key) return Promise.resolve([]);
   if (!artCache.has(key)) artCache.set(key, (async () => {
-    const img = await loadImg(await (await fetch(coverUrl(key))).blob());
+    const r = await fetch(coverUrl(key));
+    if (!r.ok) throw new Error('no cover');
+    const img = await loadImg(await r.blob());
     const n = Math.min(img.naturalWidth, img.naturalHeight), c = h('canvas', { width: 512, height: 512 });
     c.getContext('2d').drawImage(img, (img.naturalWidth - n) / 2, (img.naturalHeight - n) / 2, n, n, 0, 0, 512, 512);
-    return [{ src: c.toDataURL('image/jpeg', 0.85), sizes: '512x512', type: 'image/jpeg' }];
-  })().catch(() => []));
+    const art = [{ src: c.toDataURL('image/jpeg', 0.85), sizes: '512x512', type: 'image/jpeg' }];
+    artReady.set(key, art);
+    return art;
+  })().catch(() => { artCache.delete(key); return []; }));
   return artCache.get(key);
+}
+// Previous / next on the lock screen, headphones and keyboards, and dragging the lock screen's progress bar.
+// Set again each time a song starts: iPhones can forget them when the audio changes, and then show "skip 15 seconds"
+// buttons. (The seek-back / seek-forward buttons are left unset on purpose: on iPhone they take the place of previous / next.)
+function mediaControls() {
+  if (!('mediaSession' in navigator)) return;
+  const set = (name, fn) => { try { navigator.mediaSession.setActionHandler(name, fn); } catch {} };
+  set('previoustrack', () => { if (!editorOpen) playPrev(); });
+  set('nexttrack', () => { if (!editorOpen) skip(); });
+  set('seekbackward', null); set('seekforward', null);
+  set('seekto', e => { if (!editorOpen && e.seekTime != null && isFinite(audio.duration)) audio.currentTime = Math.min(e.seekTime, audio.duration); });
 }
 function nextIndex() {
   if (P.shuffle && P.pick?.from === qi && P.pick.len === queue.length && P.pick.to < queue.length) return P.pick.to;
@@ -1906,7 +2013,7 @@ audio.onended = () => { if (!realSrc()) return; if (P.userQ.length || settings.a
 audio.onerror = async () => {
   if (!cur) return;
   const why = await storageProblem();
-  toast(why || `Can't play ${cur.name} in this browser. Use Download instead.`, { error: true, ms: why ? 15000 : 6000 });
+  toast(why || `This browser can't play “${cur.name}”.${canEdit(cur.project_id) ? ' You can still get the file with ⋯ → Export file.' : ''}`, { error: true, ms: why ? 15000 : 7000 });
 };
 // Asks the server whether Backblaze is refusing files, and turns the answer into plain words (once per minute at most).
 let lastCheck = 0, lastWhy = '';
@@ -1927,10 +2034,8 @@ async function storageProblem() {
       : `Backblaze isn't answering properly (${r.status} ${r.code || ''}). Try again in a bit.`;
   return lastWhy;
 }
-if ('mediaSession' in navigator) {
-  navigator.mediaSession.setActionHandler('previoustrack', playPrev);
-  navigator.mediaSession.setActionHandler('nexttrack', () => skip());
-}
+mediaControls();
+audio.addEventListener('playing', () => { if (realSrc() && !editorOpen) mediaControls(); });
 
 const shuffleBtn = cls => h('button', { className: 'icon-btn ' + cls + (P.shuffle ? ' on' : ''), 'aria-label': 'Shuffle', 'aria-pressed': P.shuffle, title: P.shuffle ? 'Shuffle on' : 'Shuffle off', onclick: () => setShuffle(!P.shuffle) }, icon('shuffle', 17));
 const repeatBtn = cls => h('button', { className: 'icon-btn repeat ' + cls + (P.repeat !== 'off' ? ' on' : ''), 'aria-label': `Repeat: ${P.repeat}`, title: { off: 'Repeat off', all: 'Repeat all', one: 'Repeat one' }[P.repeat], onclick: cycleRepeat },
@@ -2155,7 +2260,7 @@ async function editorClosed(t, { at, playing, saved }) {
 // ---- sharing --------------------------------------------------------------------------------
 async function shareDialog(kind, target_id, name) {
   const list = h('div', { className: 'list share-links' }, h('div', { className: 'muted' }, 'Loading…'));
-  const pw = h('input', { type: 'text', placeholder: 'Optional', autocomplete: 'off' });
+  const pw = h('input', { type: 'text', placeholder: 'Optional', autocomplete: 'off', maxLength: 200 });
   const days = h('select', {}, SHARE_DAYS.map(([v, l]) => h('option', { value: v, selected: v === settings.shareDays }, l)));
   const dl = h('input', { type: 'checkbox', className: 'toggle', 'aria-label': 'Allow downloads' });
   const pub = h('input', { type: 'checkbox', className: 'toggle', 'aria-label': 'Public link' });
@@ -2253,6 +2358,7 @@ async function listensDialog(token) {
 
 // ---- recording ----------------------------------------------------------------------------
 async function recordDialog() {
+  if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) return toast("This browser can't record. Record with another app, then upload the file.", { error: true, ms: 6000 });
   let stream;
   try { stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } }); }
   catch { return toast('Microphone access was blocked. Allow it in your browser settings.', { error: true, ms: 6000 }); }
@@ -2260,7 +2366,7 @@ async function recordDialog() {
   const rec = new MediaRecorder(stream, type ? { mimeType: type } : {});
   const chunks = []; let started = 0, timer;
   const time = h('div', { className: 'rec-time num' }, '0:00');
-  const name = h('input', { type: 'text', value: `Idea ${new Date().toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}` });
+  const name = h('input', { type: 'text', maxLength: 200, value: `Idea ${new Date().toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}` });
   const btn = h('button', { className: 'rec-ring', 'aria-label': 'Start recording' }, h('i'));
   const hint = h('div', { className: 'mono', style: { textAlign: 'center', color: 'var(--fg-3)' } }, '[tap to record]');
   const d = dialog(h('div', { className: 'stack' }, h('h2', {}, 'Record an idea'), time, btn, hint, h('label', {}, '[name]', name),
@@ -2308,7 +2414,7 @@ async function settingsDialog(only) {
     SHARE_DAYS.map(([v, l]) => h('option', { value: v, selected: v === settings.shareDays }, l)));
   const formatSel = h('select', { 'aria-label': 'Save edits as', onchange() { setSetting('saveFormat', this.value); } },
     [['mp3', 'MP3 320 kbps'], ['wav', 'WAV 24-bit']].map(([v, l]) => h('option', { value: v, selected: v === settings.saveFormat }, l)));
-  const artist = h('input', { type: 'text', value: settings.artist, placeholder: 'e.g. ssixr', maxLength: 120, 'aria-label': 'Default producer name', style: { width: '150px' }, onchange() { setSetting('artist', this.value.trim()); } });
+  const artist = h('input', { type: 'text', value: settings.artist, placeholder: 'Your name', maxLength: 120, 'aria-label': 'Default producer name', style: { width: '150px' }, onchange() { setSetting('artist', this.value.trim()); } });
   const pct = Math.min(100, (S.usage / S.limit) * 100);
   const local = h('small', {}, 'Checking…');
   const oldInfo = h('small', {}, 'Checking…');
@@ -2386,7 +2492,7 @@ async function settingsDialog(only) {
         h('button', { className: 'btn danger', onclick: () => { d.close(); deleteAccountDialog(); } }, 'Delete'))),
     !only && h('div', { className: 'set-sec' }, h('h3', {}, '[support]'),
       row('Support [vault]', 'Free, no ads. Tips help keep it that way.', h('a', { className: 'btn', href: 'https://ko-fi.com/choseroxy', target: '_blank', rel: 'noopener' }, 'Tip ☕'))),
-    h('div', { className: 'btns' }, h('span', { className: 'mono', style: { marginRight: 'auto', color: 'var(--fg-3)', alignSelf: 'center' } }, '[vault] v2.3'),
+    h('div', { className: 'btns' }, h('span', { className: 'mono', style: { marginRight: 'auto', color: 'var(--fg-3)', alignSelf: 'center' } }, '[vault] v2.4'),
       h('button', { className: 'btn primary', onclick: () => d.close() }, 'Done'))), { className: 'settings-dlg' });
   if (only) d.querySelectorAll('.set-sec').forEach(sec => sec.querySelector('h3').textContent !== `[${only}]` && sec.remove());
   api('/versions/old').then(({ count, size }) => {
@@ -2534,7 +2640,7 @@ async function shortcutDialog() {
     const { exists } = newKey ? { exists: true } : await api('/upload-key').catch(e => (oops(e), { exists: false }));
     const makeKey = async () => { const { key } = await api('/upload-key', { method: 'POST' }); draw(key); };
     fill(box,
-      h('p', { className: 'muted', style: { margin: 0 } }, 'For the web app only (Safari or the Home Screen icon), not the sideloaded [vault] app. Make one iPhone Shortcut, then choose “Upload to [vault]” whenever you share an audio file. It lands in your Inbox with BPM and key read from the name.'),
+      h('p', { className: 'muted', style: { margin: 0 } }, 'For the web app only (Safari or the Home Screen icon), not the sideloaded [vault] app. Make one iPhone Shortcut, then choose “Upload to [vault]” whenever you share an audio file. It lands in your newest project (or in “Inbox”, if you have a project called that) with BPM and key read from the name.'),
       newKey
         ? h('div', { className: 'stack' }, h('b', {}, 'Your upload key'), code(newKey), h('small', { className: 'muted' }, "Copy it now. It won't be shown again; make a new one any time."))
         : exists
@@ -2550,7 +2656,7 @@ async function shortcutDialog() {
         h('li', {}, 'Add ', h('b', {}, 'Get Details of Files'), ' → ', h('b', {}, 'File Extension'), ' of ', h('i', {}, 'Repeat Item'), '.'),
         h('li', {}, 'Add ', h('b', {}, 'Get Contents of URL'), '. URL: this, then the URL-encoded name, ', h('code', {}, '&ext='), ', then the file extension:', code(endpoint + '?name=')),
         h('li', {}, 'In that action set ', h('b', {}, 'Method: POST'), '. Add a header ', h('b', {}, 'Authorization'), ' with the value ', h('code', {}, 'Bearer '), ' followed by your key. Set ', h('b', {}, 'Request Body: File'), ' → ', h('i', {}, 'Repeat Item'), '.'),
-        h('li', {}, 'Add ', h('b', {}, 'Show Notification'), ' with ', h('i', {}, 'Contents of URL'), ', so you see “Saved … to Inbox”.')),
+        h('li', {}, 'Add ', h('b', {}, 'Show Notification'), ' with ', h('i', {}, 'Contents of URL'), ', so you see where it was saved.')),
       h('small', { className: 'muted' }, 'Want a different project? Add ', h('code', {}, '&project=Your Project Name'), ' to the URL. Too many wrong keys locks uploads for 15 minutes.'));
   }
   draw();
@@ -2594,7 +2700,9 @@ async function renderTrash() {
     h('button', { className: 'btn', onclick: () => restore(kind, id) }, 'Restore'),
     h('button', { className: 'icon-btn', 'aria-label': `Delete ${title} forever`, title: 'Delete forever', async onclick() {
       if (!(await confirm(`Delete “${title}” forever?`, 'This can’t be undone.', 'Delete forever'))) return;
-      await untilDone(() => api(`/trash/${kind}/${id}`, { method: 'DELETE' })).catch(oops); load();
+      const note = toast(`Deleting “${title}”…`, { ms: 0 });
+      await untilDone(() => api(`/trash/${kind}/${id}`, { method: 'DELETE' })).catch(oops);
+      note.remove(); load();
     } }, icon('trash', 16)));
   const items = [
     ...data.projects.map(p => row(p.cover, p.name, `Project · ${p.tracks} ${p.tracks === 1 ? 'track' : 'tracks'} · ${left(p.deleted_at)} days left`, 'project', p.id)),
@@ -2622,17 +2730,18 @@ function renderBulk() {
   const n = S.select.size, list = visibleTracks(), all = list.length > 0 && list.every(t => S.select.has(t.id));
   const act = (ic, label, run, danger) => h('button', { className: 'btn' + (danger ? ' danger' : ''), disabled: !n, onclick: run, 'aria-label': label }, icon(ic, 15), h('span', { className: 'lbl-sm' }, label));
   const done = () => { S.select = null; load(); };
+  const bulk = body => api('/tracks/bulk', { method: 'POST', body }).then(() => true, oops); // true when it went through
   // Star / throwaway the selection (or undo it if they all already are), with Undo putting each track back how it was.
   const markAct = (mark, ic, onLabel, offLabel) => {
     const already = n > 0 && picked().every(t => t.mark === mark), to = already ? null : mark;
     return act(ic, already ? offLabel : onLabel, async () => {
       const before = picked().map(t => [t.id, t.mark ?? null]);
-      await api('/tracks/bulk', { method: 'POST', body: { ids: before.map(([id]) => id), set: { mark: to } } }).catch(oops);
+      if (!(await bulk({ ids: before.map(([id]) => id), set: { mark: to } }))) return;
       const what = { star: ['Starred', 'Unstarred'], throw: ['Marked as throwaways:', 'No longer throwaways:'] }[mark][already ? 1 : 0];
       toast(`${what} ${n}`, { ms: 7000, action: { label: 'Undo', async run() {
         for (const m of ['star', 'throw', null]) {
           const ids = before.filter(([, x]) => x === m).map(([id]) => id);
-          if (ids.length) await api('/tracks/bulk', { method: 'POST', body: { ids, set: { mark: m } } }).catch(oops);
+          if (ids.length) await bulk({ ids, set: { mark: m } });
         }
         load();
       } } });
@@ -2646,7 +2755,7 @@ function renderBulk() {
     act('folder', 'Move', async () => {
       const to = await projectPicker(`Move ${n} ${n === 1 ? 'track' : 'tracks'}`);
       if (!to) return;
-      await api('/tracks/bulk', { method: 'POST', body: { ids: [...S.select], set: { project_id: to } } }).catch(oops);
+      if (!(await bulk({ ids: [...S.select], set: { project_id: to } }))) return;
       toast(`Moved ${n} to ${projectOf(to)?.name}`); done();
     }),
     act('tag', 'Tag', async () => {
@@ -2660,14 +2769,13 @@ function renderBulk() {
     act('pencil', 'Producer', async () => {
       const name = await prompt('Set producer / artist', settings.artist, { label: 'Producer / artist', ok: 'Save' });
       if (name == null) return;
-      await api('/tracks/bulk', { method: 'POST', body: { ids: [...S.select], set: { artist: name } } }).catch(oops);
-      done();
+      if (await bulk({ ids: [...S.select], set: { artist: name } })) done();
     }),
     act('gauge', 'Detect', () => detectTracks(picked(), true)),
     act('download', 'ZIP', () => zipTracks(picked(), 'Selected tracks')),
     act('trash', 'Delete', async () => {
       const ids = [...S.select];
-      await api('/tracks/bulk', { method: 'POST', body: { ids, trash: true } }).catch(oops);
+      if (!(await bulk({ ids, trash: true }))) return;
       toast(`Moved ${ids.length} to the trash`, { ms: 7000, action: { label: 'Undo', async run() { for (const id of ids) await api('/trash/restore', { method: 'POST', body: { kind: 'track', id } }).catch(oops); load(); } } });
       done();
     }, true),
@@ -2743,7 +2851,7 @@ async function zipTracks(list, name, cover) {
 }
 // Writes the whole library into a folder you pick (folders → projects → files). Chrome/Edge on a computer.
 async function backupAll() {
-  if (!window.showDirectoryPicker) return toast('Full backup needs Chrome or Edge on a computer. On this device, use ⋯ → Download as ZIP on each project.', { ms: 9000 });
+  if (!window.showDirectoryPicker) return toast('Full backup needs Chrome or Edge on a computer. On this device, use ⋯ → Export as ZIP on each project.', { ms: 9000 });
   let root;
   try { root = await window.showDirectoryPicker({ mode: 'readwrite' }); } catch { return; }
   const top = await root.getDirectoryHandle(`[vault] backup ${new Date().toISOString().slice(0, 10)}`, { create: true });
@@ -3010,4 +3118,9 @@ document.body.insertAdjacentHTML('beforeend', '<svg width="0" height="0" style="
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 addEventListener('online', load);
 addEventListener('offline', () => { S.online = false; render(); });
+// The library saved from last time shows at once and is replaced by the fresh one when it arrives.
+// The very first time there's nothing saved, so it says it's loading instead of showing an empty page.
+const last = store.get('tree');
+if (last?.me) { applyTree(last); render(); }
+else fill($('#main'), h('div', { className: 'empty boot' }, h('span', { className: 'disc' }), h('b', {}, 'Loading your library…')));
 load();

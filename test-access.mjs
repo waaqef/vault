@@ -88,6 +88,25 @@ try {
   await call(owner, 'PATCH', `/api/shares/${token}`, { public: true });
   assert.ok((await call(null, 'GET', `/s/${token}/audio/${track}?full=1`)).bytes >= full.bytes, 'a public link plays in full');
 
+  // a stored file belongs to one track: an editor can't attach the owner's file to another track (and delete it from there)
+  assert.equal((await call(editor, 'POST', '/api/tracks', { project_id: project, name: 'copy', file_key: up.key })).status, 400, 're-using a file that is already a track');
+  assert.equal((await call(editor, 'POST', `/api/tracks/${track}/versions`, { file_key: up.key })).status, 400, 're-using a file as a new version');
+
+  // replacing a song with a new file: it becomes the version in use, and the old file is kept as a version
+  const again = wav(2), up2 = (await call(editor, 'POST', '/api/upload-url', { name: 'a2.wav', type: 'audio/wav', size: again.length, project_id: project })).data;
+  await fetch(B + up2.url, { method: 'PUT', body: again, headers: { 'content-type': 'audio/wav' } });
+  assert.equal((await call(editor, 'POST', `/api/tracks/${track}/versions`, { file_key: up2.key, duration: 2, note: 'New file: a2.wav' })).status, 200, 'an editor replacing the file');
+  const versions = (await call(owner, 'GET', `/api/tracks/${track}/versions`)).data;
+  assert.deepEqual(versions.map(v => v.file_key).sort(), [up.key, up2.key].sort(), 'both files are kept as versions');
+  assert.equal((await call(owner, 'GET', '/api/tree')).data.tracks.find(t => t.id === track).file_key, up2.key, 'and the track plays the new one');
+
+  // odd input is made safe, not stored as it came: text for a number, a number for a name
+  await call(owner, 'PATCH', `/api/tracks/${track}`, { bpm: 'fast', duration: 'long', tags: 123 });
+  const tidy = (await call(owner, 'GET', '/api/tree')).data.tracks.find(t => t.id === track);
+  assert.ok(tidy.bpm === null && tidy.duration === null && tidy.tags === '123', 'track fields are cleaned');
+  assert.equal((await call(owner, 'POST', '/api/projects', { name: 12345 })).status, 200, 'a number for a project name is not an error');
+  assert.equal((await call(owner, 'POST', '/api/presets', { name: 'x', settings: 'not settings' })).status, 400, 'presets must be settings');
+
   // bad edits are ignored rather than breaking the track: no project, a blank name
   await call(owner, 'PATCH', `/api/tracks/${track}`, { project_id: null, name: '   ' });
   const kept = (await call(owner, 'GET', '/api/tree')).data.tracks.find(t => t.id === track);

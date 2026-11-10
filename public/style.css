@@ -197,6 +197,8 @@ body.paused .bars i { animation-play-state: paused; }
 .empty { padding: 72px 20px; text-align: center; color: var(--fg-3); border: 1px dashed rgba(255,255,255,.12); border-radius: 18px; display: grid; justify-items: center; gap: 6px; }
 .empty .disc { width: 64px; height: 64px; margin-bottom: 10px; animation: spin 14s linear infinite; }
 .empty b { color: var(--fg); font-weight: 500; font-size: 15px; }
+.empty.boot { border: 0; margin: 18vh 28px 0; }
+.empty.boot .disc { animation-duration: 1.6s; }
 
 /* ---------- player ---------- */
 #player {

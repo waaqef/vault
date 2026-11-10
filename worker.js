@@ -69,6 +69,8 @@ const USERNAME_RE = /^[a-z0-9._-]{3,24}$/;
 // Usernames are unique (for signing in and adding people); the display name is what others see, and needn't be.
 const nameOf = u => u.display_name || u.username;
 const cleanName = (v, max) => String(v ?? '').replace(/[\u0000-\u001f\u007f]/g, '').replace(/\s+/g, ' ').trim().slice(0, max);
+// A number within a range, or null for anything that isn't one.
+const numOrNull = (v, min, max) => (v === null || v === undefined || v === '' || typeof v === 'boolean' || !isFinite(v) ? null : Math.min(max, Math.max(min, Number(v))));
 const publicUser = (u, extra = {}) => ({ id: u.id, username: u.username, displayName: u.display_name || null, avatar: u.avatar || null, isAdmin: !!u.is_admin,
   storage: u.storage, driveConnected: !!u.drive_refresh, home: homeOf(u), ...extra });
 // The person's Home layout: sections in order, built-in ones switched on/off, and their own named sections of projects.
@@ -141,6 +143,10 @@ async function remove(env, key, owner) {
 async function verify(env, key, kind, owner) {
   if (!validKey(key) || keyKind(key) !== kind) throw userError('Bad file key');
   if (drive.isDriveKey(key) !== usesDrive(env, owner)) throw userError('Bad file key');
+  // A stored file belongs to one track or one cover. Without this, someone who can see a file's key in one project
+  // could attach it to a track they can edit in another, and delete it from there.
+  const used = await env.DB.prepare('SELECT 1 FROM track_versions WHERE file_key = ? UNION ALL SELECT 1 FROM tracks WHERE cover = ? UNION ALL SELECT 1 FROM projects WHERE cover = ? LIMIT 1').bind(key, key, key).first();
+  if (used) throw userError('Bad file key');
   const got = await firstBytes(env, key, owner);
   if (!got) throw userError('Upload not found — try again');
   if (sniff(got.bytes) !== kind || !(got.size <= MAX[kind])) {
@@ -318,7 +324,7 @@ on('POST', '/api/folders', async (req, env, b, p, url, ctx, u) => {
   if (b.parent_id && !(await ownFolder(env, u, b.parent_id))) return fail('Folder not found', 404);
   const id = uid();
   await env.DB.prepare('INSERT INTO folders (id, name, parent_id, owner_id, created_at) VALUES (?, ?, ?, ?, ?)')
-    .bind(id, (b.name || 'New folder').slice(0, 200), b.parent_id || null, u.id, now()).run();
+    .bind(id, cleanName(b.name, 200) || 'New folder', b.parent_id || null, u.id, now()).run();
   return json({ id });
 });
 on('PATCH', '/api/folders/:id', async (req, env, b, { id }, url, ctx, u) => {
@@ -351,7 +357,7 @@ on('POST', '/api/projects', async (req, env, b, p, url, ctx, u) => {
   if (b.folder_id && !(await ownFolder(env, u, b.folder_id))) return fail('Folder not found', 404);
   const id = uid();
   await env.DB.prepare('INSERT INTO projects (id, name, folder_id, owner_id, created_at) VALUES (?, ?, ?, ?, ?)')
-    .bind(id, (b.name || 'Untitled project').slice(0, 200), b.folder_id || null, u.id, now()).run();
+    .bind(id, cleanName(b.name, 200) || 'Untitled project', b.folder_id || null, u.id, now()).run();
   return json({ id });
 });
 on('PATCH', '/api/projects/:id', async (req, env, b, { id }, url, ctx, u) => {
@@ -360,7 +366,7 @@ on('PATCH', '/api/projects/:id', async (req, env, b, { id }, url, ctx, u) => {
   if (old.owner_id !== u.id) delete b.folder_id; // folders are the owner's own
   if (b.folder_id && !(await ownFolder(env, u, b.folder_id))) return fail('Folder not found', 404);
   const owner = await storeOf(env, old.owner_id, u);
-  if (b.cover) await verify(env, b.cover, 'cover', owner);
+  if (b.cover && b.cover !== old.cover) await verify(env, b.cover, 'cover', owner);
   await update(env, 'projects', id, b, ['name', 'folder_id', 'cover']);
   if (b.name && b.name !== old.name) await logActivity(env, id, u, `renamed the project to “${b.name}”`);
   if ('cover' in b && b.cover !== old.cover) await logActivity(env, id, u, b.cover ? 'changed the cover' : 'removed the cover');
@@ -380,7 +386,8 @@ on('POST', '/api/upload-url', async (req, env, b, p, url, ctx, u) => {
   const kind = kindOf(b.name);
   if (!kind) return fail(`${b.name} isn't an audio file or cover image`);
   const top = kind === 'audio' ? 'audio/' : 'image/';
-  if (b.type && b.type !== 'application/octet-stream' && !b.type.startsWith(top)) return fail(`${b.name} isn't an audio file or cover image`);
+  const sent = String(b.type || ''); // what the browser says the file is
+  if (sent && sent !== 'application/octet-stream' && !sent.startsWith(top)) return fail(`${b.name} isn't an audio file or cover image`);
   if (!(b.size > 0) || b.size > MAX[kind]) return fail(`${b.name} is too big (max ${MAX[kind] / 1024 ** 2} MB)`);
   const type = contentType(b.name);
   let store = u; // a shared project's files go in its owner's storage
@@ -402,12 +409,26 @@ on('POST', '/api/upload-url', async (req, env, b, p, url, ctx, u) => {
 });
 
 // Tracks
+// Makes a request's track fields safe to store: text is trimmed to its limit, numbers are real numbers in range.
+function cleanTrack(b) {
+  if ('artist' in b) b.artist = cleanName(b.artist, 120);
+  if ('tags' in b) b.tags = cleanName(b.tags, 500);
+  if ('notes' in b) b.notes = String(b.notes ?? '').slice(0, 20000);
+  if ('bpm' in b) b.bpm = numOrNull(b.bpm, 20, 999);
+  if ('duration' in b) b.duration = numOrNull(b.duration, 0, 86400);
+  if ('musical_key' in b) b.musical_key = cleanName(b.musical_key, 12) || null;
+  if ('position' in b) { b.position = numOrNull(b.position, -1e9, 1e9); if (b.position === null) delete b.position; }
+  if ('peaks' in b) b.peaks = peaksOrNull(b.peaks);
+  if ('mark' in b) b.mark = ['star', 'throw'].includes(b.mark) ? b.mark : null; // favourite / throwaway
+  return b;
+}
 async function createTrack(env, b, size) {
+  cleanTrack(b);
   const id = uid(), t = now();
   const pos = (await env.DB.prepare('SELECT COALESCE(MAX(position), -1) + 1 AS p FROM tracks WHERE project_id = ?').bind(b.project_id).first()).p;
   await env.DB.batch([
     env.DB.prepare('INSERT INTO tracks (id, project_id, name, file_key, size, duration, bpm, musical_key, tags, artist, peaks, position, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .bind(id, b.project_id, (b.name || 'Untitled').slice(0, 300), b.file_key, size, b.duration || null, b.bpm || null, b.musical_key || null, b.tags || '', (b.artist || '').slice(0, 120), peaksOrNull(b.peaks), pos, t),
+      .bind(id, b.project_id, cleanName(b.name, 300) || 'Untitled', b.file_key, size, b.duration || null, b.bpm || null, b.musical_key || null, b.tags || '', b.artist || '', b.peaks || null, pos, t),
     env.DB.prepare('INSERT INTO track_versions (id, track_id, file_key, size, duration, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
       .bind(uid(), id, b.file_key, size, b.duration || null, 'Original', t),
   ]);
@@ -418,7 +439,7 @@ on('POST', '/api/tracks', async (req, env, b, p, url, ctx, u) => {
   if (!proj) return fail('Project not found', 404);
   const size = await verify(env, b.file_key, 'audio', await storeOf(env, proj.owner_id, u));
   const id = await createTrack(env, b, size);
-  await logActivity(env, proj.id, u, `added “${(b.name || 'Untitled').slice(0, 120)}”`);
+  await logActivity(env, proj.id, u, `added “${cleanName(b.name, 120) || 'Untitled'}”`);
   return json({ id });
 });
 const TRACK_FIELDS = ['name', 'project_id', 'bpm', 'musical_key', 'tags', 'cover', 'position', 'notes', 'artist', 'duration', 'peaks', 'mark'];
@@ -429,11 +450,8 @@ on('PATCH', '/api/tracks/:id', async (req, env, b, { id }, url, ctx, u) => {
   // Moving is only within the same owner's projects (the file stays in that owner's storage).
   if (b.project_id && (await editProject(env, u, b.project_id))?.owner_id !== old.owner_id) return fail('Project not found', 404);
   const owner = await storeOf(env, old.owner_id, u);
-  if (b.cover) await verify(env, b.cover, 'cover', owner);
-  if (typeof b.notes === 'string') b.notes = b.notes.slice(0, 20000);
-  if (typeof b.artist === 'string') b.artist = b.artist.slice(0, 120);
-  if ('peaks' in b) b.peaks = peaksOrNull(b.peaks);
-  if ('mark' in b) b.mark = ['star', 'throw'].includes(b.mark) ? b.mark : null; // favourite / throwaway
+  if (b.cover && b.cover !== old.cover) await verify(env, b.cover, 'cover', owner);
+  cleanTrack(b);
   await update(env, 'tracks', id, b, TRACK_FIELDS);
   if ('cover' in b && old.cover && old.cover !== b.cover) await remove(env, old.cover, owner);
   if (b.name && b.name !== old.name) await logActivity(env, old.project_id, u, `renamed “${old.name}” to “${b.name}”`);
@@ -506,11 +524,12 @@ on('POST', '/api/tracks/:id/versions', async (req, env, b, { id }, url, ctx, u) 
   const t = await editTrack(env, u, id);
   if (!t) return fail('Not found', 404);
   const size = await verify(env, b.file_key, 'audio', await storeOf(env, t.owner_id, u));
-  await logActivity(env, t.project_id, u, `saved a new version of “${t.name}”${b.note ? `: ${String(b.note).slice(0, 80)}` : ''}`);
+  const note = cleanName(b.note, 300), duration = numOrNull(b.duration, 0, 86400);
+  await logActivity(env, t.project_id, u, `saved a new version of “${t.name}”${note ? `: ${note.slice(0, 80)}` : ''}`);
   await env.DB.batch([
     env.DB.prepare('INSERT INTO track_versions (id, track_id, file_key, size, duration, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .bind(uid(), id, b.file_key, size, b.duration || null, (b.note || 'Edit').slice(0, 300), now()),
-    env.DB.prepare('UPDATE tracks SET file_key = ?, size = ?, duration = ?, peaks = ? WHERE id = ?').bind(b.file_key, size, b.duration || null, peaksOrNull(b.peaks), id),
+      .bind(uid(), id, b.file_key, size, duration, note || 'Edit', now()),
+    env.DB.prepare('UPDATE tracks SET file_key = ?, size = ?, duration = ?, peaks = ? WHERE id = ?').bind(b.file_key, size, duration, peaksOrNull(b.peaks), id),
   ]);
   return json({ ok: true });
 });
@@ -701,7 +720,7 @@ on('POST', '/api/shares', async (req, env, b, p, url, ctx, u) => {
   if (!(await ownsTarget(env, u, b.kind, b.target_id))) return fail('Not found', 404);
   const token = uid().replace(/-/g, '');
   await env.DB.prepare('INSERT INTO shares (token, kind, target_id, password_hash, expires_at, allow_download, public, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-    .bind(token, b.kind, b.target_id, b.password ? await hmac(token, b.password) : null, b.days ? now() + b.days * DAY : null, b.allow_download ? 1 : 0, b.public ? 1 : 0, now()).run();
+    .bind(token, b.kind, b.target_id, b.password ? await hmac(token, String(b.password).slice(0, 200)) : null, Number(b.days) > 0 ? now() + Math.min(3650, Number(b.days)) * DAY : null, b.allow_download ? 1 : 0, b.public ? 1 : 0, now()).run();
   return json({ token });
 });
 on('PATCH', '/api/shares/:token', async (req, env, b, { token }, url, ctx, u) => {
@@ -775,7 +794,10 @@ on('POST', '/api/shared/leave', async (req, env, b, p, url, ctx, u) => {
 // Editor presets (synced across your devices)
 on('GET', '/api/presets', async (req, env, b, p, url, ctx, u) => json((await env.DB.prepare('SELECT * FROM presets WHERE owner_id = ? ORDER BY name COLLATE NOCASE').bind(u.id).all()).results));
 on('POST', '/api/presets', async (req, env, b, p, url, ctx, u) => {
-  await env.DB.prepare('INSERT INTO presets (id, name, settings, owner_id, created_at) VALUES (?, ?, ?, ?, ?)').bind(uid(), (b.name || 'Preset').slice(0, 100), JSON.stringify(b.settings), u.id, now()).run();
+  const settings = b.settings && typeof b.settings === 'object' ? JSON.stringify(b.settings) : '';
+  if (!settings || settings.length > 20000) return fail("That preset couldn't be saved.");
+  if ((await env.DB.prepare('SELECT COUNT(*) AS n FROM presets WHERE owner_id = ?').bind(u.id).first()).n >= 200) return fail('You have 200 presets. Delete one to save another.');
+  await env.DB.prepare('INSERT INTO presets (id, name, settings, owner_id, created_at) VALUES (?, ?, ?, ?, ?)').bind(uid(), cleanName(b.name, 100) || 'Preset', settings, u.id, now()).run();
   return json({ ok: true });
 });
 on('DELETE', '/api/presets/:id', async (req, env, b, { id }, url, ctx, u) => {
@@ -790,7 +812,9 @@ on('POST', '/api/password', async (req, env, b, p, url, ctx, u) => {
   if (wait) return fail(lockMessage(wait), 429);
   const ok = u.id === OWNER ? await adminPasswordOk(env, b.current || '') : same(await passHash(env, u.pass_salt, b.current || ''), u.pass_hash || '');
   if (!ok) { await recordFail(env, lockKey); return fail('Current password is wrong', 403); }
-  if (!b.next || b.next.length < 8) return fail('Use at least 8 characters');
+  b.next = String(b.next || '');
+  if (b.next.length < 8) return fail('Use at least 8 characters');
+  if (b.next.length > 200) return fail('Use 200 characters or fewer');
   const salt = uid();
   if (u.id === OWNER) {
     await setConfig(env, 'password', JSON.stringify({ salt, hash: await passHash(env, salt, b.next) }));
@@ -983,6 +1007,7 @@ async function signup(req, env) {
   if (!USERNAME_RE.test(name)) return fail('Usernames are 3–24 letters, numbers, dots, dashes or underscores.');
   if (await env.DB.prepare('SELECT 1 FROM users WHERE username = ?').bind(name).first()) return fail('That username is taken.');
   if (!b.password || String(b.password).length < 8) return fail('Use at least 8 characters for your password.');
+  if (String(b.password).length > 200) return fail('Use 200 characters or fewer for your password.');
   if (b.avatar && !AVATAR_RE.test(b.avatar)) return fail('That picture didn\'t work. Try another one.');
   const id = uid(), salt = uid();
   // One transaction: the account is made only if the code is still free, and the code is used only if the account was
@@ -1178,7 +1203,7 @@ async function handleShare(req, env, url, ctx) {
       const lockKey = `share:${token}:${clientIp(req)}`, wait = await lockedFor(env, lockKey);
       if (wait) return fail(lockMessage(wait), 429);
       const ok = same(cookie(req, 'share'), await shareCookie(env, token))
-        || (b.password && same(await hmac(token, b.password), s.password_hash));
+        || (b.password && same(await hmac(token, String(b.password).slice(0, 200)), s.password_hash));
       if (!ok) { if (b.password) await recordFail(env, lockKey); return fail(b.password ? 'Wrong password' : 'Password needed', 401); }
       headers['set-cookie'] = setCookie('share', await shareCookie(env, token), `/s/${token}`, 30 * 86400);
     }
@@ -1225,7 +1250,9 @@ async function handleShare(req, env, url, ctx) {
     const b = await req.json().catch(() => ({}));
     const t = tracks.find(t => t.id === b.track_id);
     if (!t) return fail('Not found', 404);
-    const who = viewer ? nameOf(viewer) : String(b.name || '').trim().slice(0, 80) || 'Anonymous';
+    const who = viewer ? nameOf(viewer) : cleanName(b.name, 80) || 'Anonymous';
+    // ponytail: flood guard per link (200 plays per 10 min); add per-address limits if a link gets abused
+    if ((await env.DB.prepare('SELECT COUNT(*) AS n FROM listens WHERE share_token = ? AND at > ?').bind(token, now() - 10 * 60e3).first()).n >= 200) return fail('Too many plays right now', 429);
     // One notification per listener per half hour, not one per track (nameless listeners on public links: one a day).
     const quiet = viewer || String(b.name || '').trim() ? 30 * 60e3 : DAY;
     const recent = await env.DB.prepare('SELECT 1 FROM listens WHERE share_token = ? AND listener_name = ? AND at > ? LIMIT 1').bind(token, who, now() - quiet).first();
@@ -1244,7 +1271,7 @@ async function handleShare(req, env, url, ctx) {
     const b = await req.json().catch(() => ({}));
     const t = tracks.find(t => t.id === b.track_id);
     if (!viewer && !s.public) return fail('Sign in to comment', 401);
-    const body = String(b.body || '').trim().slice(0, 1000), who = viewer ? nameOf(viewer) : String(b.name || '').trim().slice(0, 80) || 'Anonymous';
+    const body = String(b.body || '').trim().slice(0, 1000), who = viewer ? nameOf(viewer) : cleanName(b.name, 80) || 'Anonymous';
     if (!t) return fail('Not found', 404);
     if (!body) return fail('Write something first');
     // ponytail: flood guard per link (30 per 10 min); add per-address limits if a link gets abused
@@ -1313,7 +1340,9 @@ export default {
       }
       return fail('Not found', 404);
     } catch (e) {
-      return fail(e.message || 'Something went wrong', e.status || 500);
+      if (e.status) return fail(e.message, e.status); // one of ours, already in plain words
+      console.error(e.stack || e); // unexpected: the details go to the log, not onto someone's screen
+      return fail("Something went wrong on [vault]'s side. Try again in a moment.", 500);
     }
   },
 };

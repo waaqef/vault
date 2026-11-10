@@ -841,7 +841,8 @@ export async function openEditor(track, app) {
     }
     const p = presets.find(p => p.id === v);
     if (!p) return;
-    s = { ...defaults(), ...JSON.parse(p.settings) }; syncLinked();
+    try { s = { ...defaults(), ...JSON.parse(p.settings) }; } catch { return toast("That preset couldn't be read", { error: true }); }
+    syncLinked();
     rebuild(); live(); renderPanel();
     toast(`Loaded “${p.name}”`);
   }

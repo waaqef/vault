@@ -31,6 +31,7 @@ input:focus{border-color:rgba(255,255,255,.28)}
 button{background:#fff;color:var(--bg);border:0;font-weight:500;cursor:pointer;transition:transform .12s var(--ease)}button:active{transform:scale(.97)}
 audio{position:fixed;left:0;right:0;margin:0 auto;bottom:calc(16px + env(safe-area-inset-bottom));width:min(648px,calc(100% - 32px));animation:rise .4s var(--ease)}
 .err{color:#ff6b63;min-height:1em}
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(84px + env(safe-area-inset-bottom));z-index:9;max-width:calc(100% - 32px);padding:10px 16px;border-radius:14px;background:#2a2a2a;color:var(--fg);box-shadow:0 10px 30px rgba(0,0,0,.5),inset 0 0 0 1px rgba(255,99,90,.5);font-size:13px}
 .mw{display:block;width:80px;height:20px}
 .now{position:sticky;top:0;z-index:2;margin:0 -12px 18px;padding:14px 12px 12px;border-radius:16px;background:url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%27140%27 height=%27140%27%3E%3Cfilter id=%27n%27%3E%3CfeTurbulence type=%27fractalNoise%27 baseFrequency=%27.9%27 numOctaves=%272%27 stitchTiles=%27stitch%27/%3E%3CfeColorMatrix values=%270 0 0 0 1 0 0 0 0 1 0 0 0 0 1 .16 0 0 0 0%27/%3E%3C/filter%3E%3Crect width=%27100%25%27 height=%27100%25%27 filter=%27url(%23n)%27/%3E%3C/svg%3E") 0 0/140px,linear-gradient(165deg,rgba(62,62,62,.66),rgba(28,28,28,.6));-webkit-backdrop-filter:blur(18px) saturate(160%);backdrop-filter:blur(18px) saturate(160%);box-shadow:inset 0 1px 0 rgba(255,255,255,.09),0 12px 40px rgba(0,0,0,.35);animation:rise .35s var(--ease)}
 .now[hidden]{display:none}
@@ -54,6 +55,7 @@ ${exists ? `<audio id="a" controls hidden></audio>
 const token = location.pathname.split('/')[2], base = '/s/' + token, m = document.getElementById('m'), a = document.getElementById('a');
 const el = (t, p = {}, ...k) => { const e = document.createElement(t); Object.assign(e, p); e.append(...k); return e; };
 const fmt = s => s ? Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0') : '';
+const say = msg => { const t = el('div', { className: 'toast', textContent: msg }); t.setAttribute('role', 'alert'); document.body.append(t); setTimeout(() => t.remove(), 5000); };
 const brand = () => el('a', { className: 'brand', href: '/', textContent: '[vault]' });
 let name = ''; try { name = localStorage.getItem('listener') || ''; } catch {}
 async function open(password) {
@@ -112,7 +114,7 @@ function show(d) {
       const link = el('a', { href: u, download: j.filename });
       document.body.append(link); link.click(); link.remove();
       setTimeout(() => URL.revokeObjectURL(u), 60000);
-    } catch (e) { alert(e.message); }
+    } catch (e) { say(e.message); }
     btn.disabled = false;
   }
   // Waveforms arrive as 100 base64 characters, one per bar (0-63).
@@ -214,7 +216,7 @@ function show(d) {
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || 'Couldn’t post that');
       comments.push(j); input.value = ''; atMark = null; drawComments(); redraw();
-    } catch (x) { alert(x.message); }
+    } catch (x) { say(x.message); }
     post.disabled = false;
   };
 
@@ -226,10 +228,34 @@ function show(d) {
     if (leaving && navigator.sendBeacon) navigator.sendBeacon(base + '/progress', new Blob([body], { type: 'application/json' }));
     else fetch(base + '/progress', { method: 'POST', headers: { 'content-type': 'application/json' }, body, keepalive: true }).catch(() => {});
   }
+  // Lock screen: the song's name and cover, and previous / next instead of "skip 15 seconds". The phone fetches
+  // artwork without this page's cookies, so the cover is handed over as a small data URL.
+  const arts = {};
+  const artFor = k => arts[k] || (arts[k] = fetch(base + '/cover?k=' + encodeURIComponent(k)).then(r => (r.ok ? r.blob() : Promise.reject())).then(b => new Promise((res, rej) => {
+    const im = new Image();
+    im.onload = () => {
+      const n = Math.min(im.naturalWidth, im.naturalHeight), c = el('canvas', { width: 512, height: 512 });
+      c.getContext('2d').drawImage(im, (im.naturalWidth - n) / 2, (im.naturalHeight - n) / 2, n, n, 0, 0, 512, 512);
+      res([{ src: c.toDataURL('image/jpeg', 0.85), sizes: '512x512', type: 'image/jpeg' }]);
+    };
+    im.onerror = rej; im.src = URL.createObjectURL(b);
+  })).catch(() => { delete arts[k]; return []; }));
+  function lockScreen(t) {
+    if (!('mediaSession' in navigator)) return;
+    const meta = artwork => { navigator.mediaSession.metadata = new MediaMetadata({ title: t.name, artist: t.artist || d.name || '', album: d.name || '', artwork: artwork }); };
+    const k = t.cover || ck;
+    meta([]);
+    if (k) artFor(k).then(art => { if (d.tracks[cur] === t && art.length) meta(art); });
+    const set = (name, fn) => { try { navigator.mediaSession.setActionHandler(name, fn); } catch (e) {} };
+    set('previoustrack', () => { if (a.currentTime > 3 || cur < 1) a.currentTime = 0; else play(cur - 1); });
+    set('nexttrack', () => { if (cur + 1 < rows.length) play(cur + 1); });
+    set('seekbackward', null); set('seekforward', null);
+  }
   function play(i) {
     progress(true); clearInterval(timer);
     listenId = null; starting = null; maxT = 0; cur = i; atMark = null;
     const t = d.tracks[i];
+    lockScreen(t);
     rows.forEach((r, j) => r.classList.toggle('on', j === i));
     now.hidden = false; nowName.textContent = t.name; tEnd.textContent = clock(t.duration); tNow.textContent = '0:00';
     pk = peaksOf(t.peaks); loadComments(t); redraw();
@@ -254,7 +280,7 @@ function show(d) {
   };
   a.onpause = () => { document.body.classList.add('paused'); clearInterval(timer); progress(false); };
   // some .m4a files can't be previewed (their index is at the end); say so instead of failing silently
-  a.onerror = () => { if (!full && cur >= 0) { gate.querySelector('p').textContent = 'This song doesn’t have a preview. Sign in to [vault] to hear it.'; nudge(); } };
+  a.onerror = () => { if (full && cur >= 0) say('This song couldn\u2019t be played. Try again, or try another browser.'); if (!full && cur >= 0) { gate.querySelector('p').textContent = 'This song doesn’t have a preview. Sign in to [vault] to hear it.'; nudge(); } };
   a.onended = () => { if (!full) return nudge(); maxT = a.duration || maxT; progress(false); clearInterval(timer); if (cur + 1 < rows.length) play(cur + 1); };
   addEventListener('pagehide', () => progress(true));
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') progress(true); });
