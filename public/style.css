@@ -172,6 +172,7 @@ select option { background: var(--raise); color: var(--fg); }
 .trow:hover { background: var(--fill-1); }
 .trow.on { background: var(--fill-2); }
 .trow.drag-over { box-shadow: inset 0 2px 0 var(--fg); }
+.trow.drop-after { box-shadow: inset 0 -2px 0 var(--fg); }
 .trow .thumb { width: 44px; height: 44px; border-radius: 8px; display: grid; place-items: center; }
 .trow .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; letter-spacing: -0.015em; }
 .trow .sub { font-size: 12px; color: var(--fg-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: flex; align-items: center; gap: 6px; margin-top: 2px; }
@@ -250,6 +251,7 @@ input[type=checkbox].toggle:checked::after { transform: translateX(12px); backgr
   position: fixed; inset: 10px; border: 1.5px dashed rgba(255,255,255,.5); border-radius: 22px; background: rgba(25,25,25,.7);
   backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); z-index: 50; display: grid; place-items: center; pointer-events: none; animation: fade .2s;
 }
+#drop.placing { background: none; backdrop-filter: none; -webkit-backdrop-filter: none; align-items: end; padding-bottom: 96px; }
 #drop div { background: var(--fg); color: var(--bg); padding: 12px 22px; border-radius: 999px; font-weight: 500; animation: pop .3s var(--ease); }
 #toasts { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(92px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; align-items: center; gap: 8px; z-index: 60; width: min(400px, calc(100vw - 32px)); pointer-events: none; }
 .toast {

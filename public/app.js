@@ -742,10 +742,24 @@ function renderList(animate = false) {
         } else if (!S.arrange) playList(list, i);
       },
       ondragstart(e) { dragId = t.id; e.dataTransfer.setData('text/x-track', t.id); e.dataTransfer.effectAllowed = 'move'; },
-      ondragover(e) { if (manual && dragId && dragId !== t.id) { e.preventDefault(); this.classList.add('drag-over'); } },
-      ondragleave() { this.classList.remove('drag-over'); },
+      ondragover(e) {
+        if (manual && dragId && dragId !== t.id) { e.preventDefault(); this.classList.add('drag-over'); }
+        // files from the computer: a line shows where they'll land (above or below this row)
+        else if (manual && !dragId && e.dataTransfer.types.includes('Files') && canEdit(t.project_id)) {
+          e.preventDefault();
+          const r = this.getBoundingClientRect(), after = e.clientY > r.top + r.height / 2;
+          this.classList.toggle('drop-after', after); this.classList.toggle('drag-over', !after);
+        }
+      },
+      ondragleave() { this.classList.remove('drag-over', 'drop-after'); },
       ondrop(e) {
-        this.classList.remove('drag-over');
+        const after = this.classList.contains('drop-after');
+        this.classList.remove('drag-over', 'drop-after');
+        if (manual && !dragId && e.dataTransfer.types.includes('Files') && canEdit(t.project_id)) {
+          e.preventDefault(); e.stopPropagation(); dragDepth = 0; hideDrop();
+          if (!S.online) return toast("You're offline", { error: true });
+          return handleDrop(e.dataTransfer, t.project_id, { id: t.id, after });
+        }
         if (!manual || !dragId) return;
         e.preventDefault(); e.stopPropagation();
         const ids = list.map(x => x.id).filter(id => id !== dragId);
@@ -1387,7 +1401,14 @@ async function setCover(table, item, file) {
 const dropEl = $('#drop');
 const hideDrop = () => { dropEl.hidden = true; };
 let dragDepth = 0;
-addEventListener('dragenter', e => { if (e.dataTransfer.types.includes('Files')) { dragDepth++; dropEl.hidden = false; } });
+addEventListener('dragenter', e => {
+  if (!e.dataTransfer.types.includes('Files')) return;
+  dragDepth++; dropEl.hidden = false;
+  // in a project in Custom order the list stays visible, so you can drop between tracks to choose the spot
+  const placing = S.view.type === 'project' && S.projectSort === 'manual' && canEdit(S.view.id) && !!$('.trow[data-id]');
+  dropEl.classList.toggle('placing', placing);
+  dropEl.firstElementChild.textContent = placing ? 'Drop between tracks to choose the spot' : 'Drop to upload';
+});
 addEventListener('dragleave', () => { if (--dragDepth <= 0) { dragDepth = 0; hideDrop(); } });
 addEventListener('dragover', e => { if (e.dataTransfer.types.includes('Files')) e.preventDefault(); });
 addEventListener('drop', e => {
@@ -1408,7 +1429,18 @@ async function walk(entry) {
   const kids = await readDir(entry);
   return (await Promise.all(kids.filter(k => !k.name.startsWith('.')).map(walk))).flat();
 }
-async function handleDrop(dt, projectId) {
+// Moves tracks that were just uploaded to where the files were dropped (`at`: a track's id, and above or below it).
+async function placeDropped(pid, had, at) {
+  await load();
+  const all = S.tracks.concat(S.sharedTracks).filter(t => t.project_id === pid).sort((a, b) => a.position - b.position || a.created_at - b.created_at);
+  const fresh = all.filter(t => !had.has(t.id)).map(t => t.id), order = all.filter(t => had.has(t.id)).map(t => t.id);
+  const i = order.indexOf(at.id);
+  if (!fresh.length || i < 0) return;
+  order.splice(i + (at.after ? 1 : 0), 0, ...fresh);
+  await reorder(order);
+}
+// at (optional): where in the project's order the files were dropped.
+async function handleDrop(dt, projectId, at) {
   const into = projectId || (S.view.type === 'project' ? S.view.id : null);
   if (into && !canEdit(into)) return toast('You can listen to this project, not add to it', { error: true });
   const entries = [...dt.items].map(i => i.webkitGetAsEntry?.()).filter(Boolean);
@@ -1425,7 +1457,9 @@ async function handleDrop(dt, projectId) {
         if (!into) return toast('To set a cover, open the project first and drop the image there.', { ms: 5000 });
         return setCover('projects', projectOf(into), images[0]);
       }
-      waits.push(uploadTracks(rest, projectId || await targetProject()));
+      const pid = projectId || await targetProject();
+      const had = new Set(S.tracks.concat(S.sharedTracks).filter(t => t.project_id === pid).map(t => t.id));
+      waits.push(uploadTracks(rest, pid).then(() => at && placeDropped(pid, had, at)));
     }
     const folderId = S.view.type === 'project' ? projectOf(S.view.id)?.folder_id || null : null;
     for (const f of folders) {
@@ -2492,7 +2526,7 @@ async function settingsDialog(only) {
         h('button', { className: 'btn danger', onclick: () => { d.close(); deleteAccountDialog(); } }, 'Delete'))),
     !only && h('div', { className: 'set-sec' }, h('h3', {}, '[support]'),
       row('Support [vault]', 'Free, no ads. Tips help keep it that way.', h('a', { className: 'btn', href: 'https://ko-fi.com/choseroxy', target: '_blank', rel: 'noopener' }, 'Tip ☕'))),
-    h('div', { className: 'btns' }, h('span', { className: 'mono', style: { marginRight: 'auto', color: 'var(--fg-3)', alignSelf: 'center' } }, '[vault] v2.4'),
+    h('div', { className: 'btns' }, h('span', { className: 'mono', style: { marginRight: 'auto', color: 'var(--fg-3)', alignSelf: 'center' } }, '[vault] v2.4.1'),
       h('button', { className: 'btn primary', onclick: () => d.close() }, 'Done'))), { className: 'settings-dlg' });
   if (only) d.querySelectorAll('.set-sec').forEach(sec => sec.querySelector('h3').textContent !== `[${only}]` && sec.remove());
   api('/versions/old').then(({ count, size }) => {
