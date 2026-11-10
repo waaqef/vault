@@ -36,6 +36,8 @@ input:focus{border-color:rgba(255,255,255,.28)}
 button{background:#fff;color:var(--bg);border:0;font-weight:500;cursor:pointer;transition:transform .12s var(--ease)}button:active{transform:scale(.97)}
 audio{position:fixed;left:0;right:0;margin:0 auto;bottom:calc(16px + env(safe-area-inset-bottom));width:min(648px,calc(100% - 32px));animation:rise .4s var(--ease)}
 .err{color:#ff6b63;min-height:1em}
+/* "Go home": / sends people who are signed in to their library, everyone else to the about page */
+.home{display:inline-flex;align-items:center;height:40px;margin-top:18px;padding:0 20px;border-radius:999px;background:#fff;color:var(--bg);font-weight:500;text-decoration:none}
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(84px + env(safe-area-inset-bottom));z-index:9;max-width:calc(100% - 32px);padding:10px 16px;border-radius:14px;background:#2a2a2a;color:var(--fg);box-shadow:0 10px 30px rgba(0,0,0,.5),inset 0 0 0 1px rgba(255,99,90,.5);font-size:13px}
 .mw{display:block;width:80px;height:20px}
 .now{position:sticky;top:0;z-index:2;margin:0 -12px 18px;padding:14px 12px 12px;border-radius:16px;background:url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%27140%27 height=%27140%27%3E%3Cfilter id=%27n%27%3E%3CfeTurbulence type=%27fractalNoise%27 baseFrequency=%27.9%27 numOctaves=%272%27 stitchTiles=%27stitch%27/%3E%3CfeColorMatrix values=%270 0 0 0 1 0 0 0 0 1 0 0 0 0 1 .16 0 0 0 0%27/%3E%3C/filter%3E%3Crect width=%27100%25%27 height=%27100%25%27 filter=%27url(%23n)%27/%3E%3C/svg%3E") 0 0/140px,linear-gradient(165deg,rgba(62,62,62,.66),rgba(28,28,28,.6));-webkit-backdrop-filter:blur(18px) saturate(160%);backdrop-filter:blur(18px) saturate(160%);box-shadow:inset 0 1px 0 rgba(255,255,255,.09),0 12px 40px rgba(0,0,0,.35);animation:rise .35s var(--ease)}
@@ -54,7 +56,7 @@ audio{position:fixed;left:0;right:0;margin:0 auto;bottom:calc(16px + env(safe-ar
 .save{margin-top:12px;height:34px;padding:0 16px;font-size:13px}.save.on{background:rgba(255,255,255,.1);color:var(--fg)}
 @media(max-width:560px){.mwrap{display:none}.row{grid-template-columns:28px 1fr auto}.row.has-dl{grid-template-columns:28px 1fr auto 34px}.head{flex-direction:column;align-items:flex-start}.cover{width:120px;height:120px}h1{font-size:28px}}
 @media(prefers-reduced-motion:reduce){*{animation-duration:.01ms!important;animation-iteration-count:1!important}}
-</style></head><body><main id="m">${exists ? '' : '<div class="brand">[vault]</div><h1>Link not available</h1><p class="mono">[it may have expired or been turned off]</p>'}</main>
+</style></head><body><main id="m">${exists ? '' : '<div class="brand">[vault]</div><h1>Link not available</h1><p class="mono">[it may have expired or been turned off]</p><a class="home" href="/">Go home</a>'}</main>
 ${exists ? `<audio id="a" controls hidden></audio>
 <script>
 const token = location.pathname.split('/')[2], base = '/s/' + token, m = document.getElementById('m'), a = document.getElementById('a');
@@ -70,7 +72,7 @@ async function open(password) {
   const r = await fetch(base + '/open', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password }) });
   const d = await r.json();
   if (r.status === 401) return ask(password ? d.error : '');
-  if (!r.ok) { m.replaceChildren(brand(), el('h1', { textContent: 'Link not available' })); return; }
+  if (!r.ok) { m.replaceChildren(brand(), el('h1', { textContent: 'Link not available' }), el('p', { className: 'mono', textContent: '[it may have expired or been turned off]' }), el('a', { className: 'home', href: '/', textContent: 'Go home' })); return; }
   if (d.viewer) { name = d.viewer.name || d.viewer.username; me = d.viewer; }
   show(d);
 }
