@@ -1,11 +1,11 @@
 import { MAX, ACCEPT_AUDIO, ACCEPT_IMAGE, kindOf, extForType } from './types.js';
 import { icon } from './icons.js';
 import { settings, setSetting, ACCENTS } from './settings.js';
-import { decodeAudio, bpmKeyOf, parseName, trackInfo } from './detect.js';
+import { decodeAudio, bpmKeyOf, parseName, trackInfo, readTags, cleanTitle, leadNumbers } from './detect.js';
 import { peaksOf, waveSvg } from './wave.js';
 import { makeZip, safeName } from './zip.js';
 
-const APP_VERSION = '[vault] v3.3'; // shown in Settings and sent with bug reports
+const APP_VERSION = '[vault] v3.4'; // shown in Settings and sent with bug reports
 // ---- helpers ------------------------------------------------------------------
 const $ = (s, el = document) => el.querySelector(s);
 function h(tag, attrs = {}, ...kids) {
@@ -1276,7 +1276,8 @@ const fmtEta = s => (!isFinite(s) || s <= 0 ? '' : s < 60 ? `~${Math.ceil(s)}s l
 // Each file's title, artist, producer and track number are read first (its tags, else its name), and an album's
 // worth of numbered files goes in in track order, whatever order they were picked or dropped in.
 async function uploadTracks(files, project_id, folder = projectOf(project_id)?.name || '') {
-  const infos = await Promise.all(files.map(f => (kindOf(f.name) === 'audio' ? trackInfo(f).catch(() => null) : null)));
+  const numbered = leadNumbers(files.map(f => f.name));
+  const infos = await Promise.all(files.map(f => (kindOf(f.name) === 'audio' ? trackInfo(f, numbered).catch(() => null) : null)));
   const order = files.map((file, i) => ({ file, info: infos[i], i }));
   if (order.filter(x => x.info?.track != null).length > 1) order.sort((a, b) => (a.info?.track ?? 1e9) - (b.info?.track ?? 1e9) || a.i - b.i);
   const seen = new Map(S.tracks.map(t => [`${t.name.toLowerCase()}|${t.size}`, projectOf(t.project_id)?.name || 'your library']));
@@ -2703,7 +2704,8 @@ async function settingsDialog(only) {
         h('button', { className: 'btn', onclick: () => { d.close(); storageDialog(); } }, 'Manage')),
       row('Old versions', oldInfo, oldBtn),
       row('Downloads on this device', local, clearBtn),
-      row('Back up everything', 'Copies every project, cover and note into a folder on this computer', h('button', { className: 'btn', onclick: () => { d.close(); backupAll(); } }, 'Back up'))),
+      row('Back up everything', 'Copies every project, cover and note into a folder on this computer', h('button', { className: 'btn', onclick: () => { d.close(); backupAll(); } }, 'Back up')),
+      row('Tidy up track info', 'Takes track numbers off names (the order stays), moves “prod. X” into a tag, and fills in artists from the files', h('button', { className: 'btn', onclick: () => { d.close(); tidyTracks(); } }, 'Tidy up'))),
     // The share-sheet Shortcut is for the web app; hidden inside the sideloaded iPhone app.
     !nativeHaptics && h('div', { className: 'set-sec' }, h('h3', {}, '[iphone web app]'),
       row('Upload from the share sheet', 'Web app only (Safari / Home Screen), not the sideloaded app. Send audio straight from AirDrop, Files or iMessage.', h('button', { className: 'btn', onclick: () => { d.close(); shortcutDialog(); } }, 'Set up'))),
@@ -3328,6 +3330,47 @@ async function zipTracks(list, name, cover) {
   note.remove();
 }
 // Writes the whole library into a folder you pick (folders → projects → files). Chrome/Edge on a computer.
+// A stored file read like a local one (only the parts asked for are fetched), so readTags works on it.
+const remoteFile = t => ({
+  size: t.size,
+  slice: (a, b) => ({
+    arrayBuffer: async () => {
+      const end = Math.min(b, t.size);
+      if (a >= end) return new ArrayBuffer(0);
+      const ctl = new AbortController(), r = await fetch(`/api/audio/${t.id}`, { headers: { Range: `bytes=${a}-${end - 1}` }, signal: ctl.signal });
+      if (r.status !== 206) { ctl.abort(); throw new Error(`Couldn't read the file (${r.status})`); } // never pull a whole file for its tags
+      return r.arrayBuffer();
+    },
+  }),
+});
+// Every track of yours: track numbers off the names (positions don't change, so the order stays), "prod. X" out of
+// the name into a tag, and the artist and producer from the file's own tags where it has them.
+async function tidyTracks() {
+  const mine = new Set(S.projects.map(p => p.id)), tracks = S.tracks.filter(t => mine.has(t.project_id));
+  if (!tracks.length) return toast('No tracks to tidy yet.');
+  if (!(await confirm('Tidy up track info?', `Goes through your ${tracks.length} tracks. Names lose their track numbers (“01 Song” → “Song”, same order) and any “prod. X” (it becomes a tag), and the producer / artist is filled in from each file's own info where it has one.`, 'Tidy up'))) return;
+  const nums = new Map([...mine].map(id => [id, leadNumbers(tracks.filter(t => t.project_id === id).map(t => t.name))]));
+  const note = toast('', { ms: 0 });
+  let done = 0, changed = 0, failed = 0;
+  const one = async t => {
+    const tags = /\.(mp3|m4a|mp4|aac|flac)$/i.test(t.file_key || '') ? await readTags(remoteFile(t)) : {};
+    const n = cleanTitle(t.name, tags.artist || t.artist, nums.get(t.project_id)), prod = n.prod || tags.producer, body = {};
+    if (n.title !== t.name) body.name = n.title;
+    if (tags.artist && !(t.artist || '').toLowerCase().includes(tags.artist.toLowerCase())) body.artist = tags.artist.slice(0, 120);
+    if (prod && !tagsOf(t).some(x => /^prod\./i.test(x))) body.tags = [...tagsOf(t), `prod. ${prod}`].join(', ');
+    if (Object.keys(body).length) { await api(`/tracks/${t.id}`, { method: 'PATCH', body }); Object.assign(t, body); changed++; }
+  };
+  const queue = [...tracks];
+  await Promise.all(Array.from({ length: 4 }, async () => {
+    for (let t; (t = queue.shift());) {
+      try { await one(t); } catch (e) { if (e.message === 'Not logged in') throw e; failed++; }
+      note.textContent = `Tidying ${++done} of ${tracks.length}…`;
+    }
+  })).catch(oops);
+  note.remove();
+  renderMain();
+  toast(`Tidied ${changed} track${changed === 1 ? '' : 's'}${failed ? ` (${failed} couldn't be read — run it again to retry)` : ''}.`, { ms: 8000, error: failed > 0 });
+}
 async function backupAll() {
   if (!window.showDirectoryPicker) return toast('Full backup needs Chrome or Edge on a computer. On this device, use ⋯ → Export as ZIP on each project.', { ms: 9000 });
   let root;

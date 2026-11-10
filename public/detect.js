@@ -251,22 +251,28 @@ export async function readTags(file) {
 }
 // "03 - Song (prod. Che)" -> { title: 'Song', track: 3, prod: 'Che' }. A leading number only counts as a track number
 // when it's zero-padded ("01 Song") or followed by . - ) etc ("1. Song"), so "50 Cent" and "150 e minor" are left alone.
-export function parseTitle(raw, artist = '') {
-  let s = String(raw || '').replace(/\.[a-z0-9]{2,5}$/i, '').replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
+// numbered: the leading numbers of the names it came with (leadNumbers). A plain "10 Song" is track 10 when there's
+// a number just before or after it in the same album ("09 Song", "11 Song"); plain numbers under 10 never are.
+export const parseTitle = (raw, artist = '', numbered = null) =>
+  cleanTitle(String(raw || '').replace(/\.[a-z0-9]{2,5}$/i, '').replace(/_/g, ' '), artist, numbered);
+// The same for a name already in the library: no extension, and its underscores are left as they are.
+export const leadNumbers = names => new Set(names.map(n => /^(?:\d-)?(\d{1,3})(?:\s|[._-])/.exec(String(n || ''))?.[1]).filter(Boolean).map(Number));
+export function cleanTitle(name, artist = '', numbered = null) {
+  let s = String(name || '').replace(/\s+/g, ' ').trim();
   let track = null, prod = null;
-  const n = s.match(/^(?:track\s*)?[([]?(\d{1,3})[)\]]?(?:\s*[.\-–—:)]\s*|\s+)(?=\S)/i);
-  if (n && (/^0\d/.test(n[1]) || /[.\-–—:)\]]/.test(n[0]) || /^track/i.test(n[0]))) { track = +n[1]; s = s.slice(n[0].length); }
+  const n = s.match(/^(?:track\s*)?(?:\d-(?=\d\d\s))?[([]?(\d{1,3})[)\]]?(?:\s*[.\-–—:)]\s*|\s+)(?=\S)/i);
+  if (n && ((+n[1] >= 10 && [-3, -2, -1, 1].some(k => numbered?.has?.(+n[1] + k))) || /^0\d/.test(n[1]) || /[.\-–—:)\]]/.test(n[0]) || /^track/i.test(n[0]))) { track = +n[1]; s = s.slice(n[0].length); }
   const p = s.match(/\s*[([{]\s*(?:prod(?:uced)?\.?(?:\s*by)?)\s*[:.]?\s*([^)\]}]+)[)\]}]/i) || s.match(/\s+[-–—|]?\s*prod(?:uced)?\.?(?:\s*by)?[:.]?\s+(.+)$/i);
-  if (p) { prod = p[1].trim(); s = (s.slice(0, p.index) + s.slice(p.index + p[0].length)).trim(); }
+  if (p) { prod = p[1].replace(/[\s+&,-]+$/, '').trim() || null; s = (s.slice(0, p.index) + s.slice(p.index + p[0].length)).trim(); }
   if (artist) {
     const a = artist.toLowerCase(), low = s.toLowerCase();
     if (low.startsWith(a + ' - ')) s = s.slice(artist.length + 3); else if (low.endsWith(' - ' + a)) s = s.slice(0, -(artist.length + 3));
   }
-  return { title: s.trim() || String(raw || ''), track, prod };
+  return { title: s.trim() || String(name || ''), track, prod };
 }
-export async function trackInfo(file) {
+export async function trackInfo(file, numbered = null) {
   const tags = await readTags(file);
-  const byName = parseTitle(file.name, tags.artist);
+  const byName = parseTitle(file.name, tags.artist, numbered);
   const fromTag = tags.title ? parseTitle(tags.title, tags.artist) : null;
   const generic = /^(?:track|audio|untitled|new recording|recording|voice memo|bounce|export|mixdown|master)?\s*\d*$/i.test(byName.title) || /^[0-9a-f-]{16,}$/i.test(byName.title);
   return {
