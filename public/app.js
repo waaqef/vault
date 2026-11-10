@@ -191,6 +191,7 @@ async function load() {
     const next = takeNext();
     if (next) return location.replace(next);
     if (d.me && !d.me.isAdmin && !d.projects.length && !d.trash && !S.sharedProjects.length) firstProject(); // not for people who joined to listen to something shared
+    askForNotifications();
     // once per session: if Backblaze is refusing files (key or daily limit), say so straight away
     if (!S.checkedStorage && S.tracks.length) { S.checkedStorage = true; storageProblem().then(why => why && toast(why, { error: true, ms: 15000 })); }
   } catch (e) {
@@ -2503,7 +2504,7 @@ async function settingsDialog(only) {
         h('button', { className: 'btn danger', onclick: () => { d.close(); deleteAccountDialog(); } }, 'Delete'))),
     !only && h('div', { className: 'set-sec' }, h('h3', {}, '[support]'),
       row('Support [vault]', 'Free, no ads. Tips help keep it that way.', h('a', { className: 'btn', href: 'https://ko-fi.com/choseroxy', target: '_blank', rel: 'noopener' }, 'Tip ☕'))),
-    h('div', { className: 'btns' }, h('span', { className: 'mono', style: { marginRight: 'auto', color: 'var(--fg-3)', alignSelf: 'center' } }, '[vault] v2.5'),
+    h('div', { className: 'btns' }, h('span', { className: 'mono', style: { marginRight: 'auto', color: 'var(--fg-3)', alignSelf: 'center' } }, '[vault] v2.5.1'),
       h('button', { className: 'btn primary', onclick: () => d.close() }, 'Done'))), { className: 'settings-dlg' });
   if (only) d.querySelectorAll('.set-sec').forEach(sec => sec.querySelector('h3').textContent !== `[${only}]` && sec.remove());
   api('/versions/old').then(({ count, size }) => {
@@ -2516,42 +2517,65 @@ async function settingsDialog(only) {
   local.textContent = `${S.offline.size} ${S.offline.size === 1 ? 'track' : 'tracks'} · ${fmtBytes(bytes)}`;
 }
 
-// Push notifications on this device: someone played a share link, or left a comment.
+// Notifications on this device: listens, comments, and projects shared with you.
+// Browsers (and the Home Screen web app on iPhone) use web push. The sideloaded [vault] iPhone app can't (iPhone app
+// web views have no web push), so the app shows them itself: it checks the inbox every minute while it's open or
+// playing, and now and then in the background when iOS lets it. The page talks to it through `notify` and the app
+// answers on window.vaultNotify('granted' | 'denied' | 'default').
 const fromB64u = s => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), ch => ch.charCodeAt(0));
+const nativeNotify = window.webkit?.messageHandlers?.notify;
+const webPush = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+const notifyAnswers = [];
+window.vaultNotify = state => notifyAnswers.splice(0).forEach(f => f(state));
+const askApp = action => new Promise(res => { notifyAnswers.push(res); nativeNotify.postMessage({ action }); setTimeout(() => res('unknown'), 20000); });
+const pushWorker = () => Promise.race([navigator.serviceWorker.ready, new Promise(r => setTimeout(r, 4000, null))]);
+// 'on' | 'off' (can be turned on) | 'blocked' | 'unsupported'
+async function notifyStatus() {
+  if (nativeNotify) return { granted: 'on', denied: 'blocked', default: 'off' }[await askApp('status')] || 'unsupported';
+  if (!webPush) return 'unsupported';
+  if (Notification.permission === 'denied') return 'blocked';
+  const reg = await pushWorker();
+  return reg && (await reg.pushManager.getSubscription()) ? 'on' : 'off';
+}
+// Asks the phone or browser for permission (needs a tap first) and switches notifications on. True when they're on.
+async function turnOnNotifications() {
+  try {
+    if (nativeNotify) return (await askApp('request')) === 'granted';
+    if ((await Notification.requestPermission()) !== 'granted') return false;
+    const reg = await pushWorker();
+    if (!reg) throw new Error("Notifications couldn't start. Reload the page and try again.");
+    const { key } = await api('/push/key');
+    const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: fromB64u(key) });
+    await api('/push/subscribe', { method: 'POST', body: sub.toJSON() });
+    return true;
+  } catch (e) { oops(e); return false; }
+}
 function pushRow() {
   const sub = h('small', {}, 'Checking…'), btns = h('span', { className: 'btns', style: { margin: 0 } });
-  const supported = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
-  const worker = () => Promise.race([navigator.serviceWorker.ready, new Promise(r => setTimeout(r, 4000, null))]);
+  const iPhone = /iPhone|iPad/.test(navigator.userAgent);
   async function draw() {
-    if (!supported) {
-      sub.textContent = /iPhone|iPad/.test(navigator.userAgent)
-        ? 'On iPhone: Share → Add to Home Screen, open [vault] from your Home Screen, then turn this on there.'
-        : "This browser can't show notifications.";
+    const st = await notifyStatus();
+    if (st === 'unsupported') {
+      sub.textContent = iPhone ? 'On iPhone: Share → Add to Home Screen, open [vault] from your Home Screen, then turn this on there.' : "This browser can't show notifications.";
       return fill(btns);
     }
-    if (Notification.permission === 'denied') { sub.textContent = 'Blocked. Allow notifications for this site (on iPhone: Settings → Notifications → [vault]).'; return fill(btns); }
-    const reg = await worker();
-    if (!reg) { sub.textContent = "The app's background worker isn't running. Reload and try again."; return fill(btns); }
-    const s = await reg.pushManager.getSubscription();
-    sub.textContent = s ? 'On for this device' : 'When someone plays one of your links or leaves a comment';
-    fill(btns, s
-      ? [h('button', { className: 'btn', onclick: test }, 'Test'), h('button', { className: 'btn', onclick: () => off(s) }, 'Turn off')]
-      : h('button', { className: 'btn', onclick: on }, 'Turn on'));
+    if (st === 'blocked') {
+      sub.textContent = nativeNotify ? 'Off in your iPhone settings. Open Settings → Notifications and allow them.'
+        : iPhone ? 'Blocked. Allow them in iPhone Settings → Notifications → [vault].' : 'Blocked. Allow notifications for this site in your browser.';
+      return fill(btns, nativeNotify && h('button', { className: 'btn', onclick: () => nativeNotify.postMessage({ action: 'settings' }) }, 'Open Settings'));
+    }
+    sub.textContent = st === 'on'
+      ? (nativeNotify ? 'On. The app checks every minute while it’s open or playing, and every so often in the background.' : 'On for this device')
+      : 'When someone plays one of your links, comments, or shares a project with you';
+    fill(btns, st === 'on'
+      ? nativeNotify
+        ? h('button', { className: 'btn', onclick: () => nativeNotify.postMessage({ action: 'settings' }) }, 'Settings')
+        : [h('button', { className: 'btn', onclick: test }, 'Test'), h('button', { className: 'btn', onclick: off }, 'Turn off')]
+      : h('button', { className: 'btn', async onclick() { if (await turnOnNotifications()) toast('Notifications are on for this device'); draw(); } }, 'Turn on'));
   }
-  async function on() {
-    try {
-      if ((await Notification.requestPermission()) !== 'granted') return draw();
-      const reg = await worker();
-      const { key } = await api('/push/key');
-      const s = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: fromB64u(key) });
-      await api('/push/subscribe', { method: 'POST', body: s.toJSON() });
-      toast('Notifications are on for this device');
-    } catch (e) { oops(e); }
-    draw();
-  }
-  async function off(s) {
-    await api('/push/unsubscribe', { method: 'POST', body: { endpoint: s.endpoint } }).catch(() => {});
-    await s.unsubscribe().catch(() => {});
+  async function off() {
+    const reg = await pushWorker(), s = await reg?.pushManager.getSubscription();
+    if (s) { await api('/push/unsubscribe', { method: 'POST', body: { endpoint: s.endpoint } }).catch(() => {}); await s.unsubscribe().catch(() => {}); }
     draw();
   }
   async function test() {
@@ -2560,6 +2584,22 @@ function pushRow() {
   }
   draw();
   return h('div', { className: 'set-row' }, h('div', { className: 't' }, 'Listens & comments', sub), btns);
+}
+// The first time someone's signed in on a device (and notifications can work there), ask once if they'd like them.
+// Asked again later only if it got skipped because something else was on screen.
+async function askForNotifications() {
+  if (S.askedNotify || store.get('askedNotify') || !S.me || S.me.needsDrive) return;
+  S.askedNotify = true;
+  await new Promise(r => setTimeout(r, 1800));
+  if (document.querySelector('dialog[open]') || (await notifyStatus()) !== 'off') return;
+  store.set('askedNotify', true);
+  const d = dialog(h('div', { className: 'stack notify-ask' },
+    h('span', { className: 'notify-ic' }, icon('bell', 26)),
+    h('h2', {}, 'Turn on notifications?'),
+    h('p', { className: 'muted', style: { margin: 0 } }, 'Hear when someone plays one of your share links, comments on a track, or shares a project with you.'),
+    h('div', { className: 'btns' },
+      h('button', { className: 'btn ghost', onclick: () => { d.close(); toast('You can turn them on any time in Settings → Notifications', { quiet: true, ms: 4000 }); } }, 'Not now'),
+      h('button', { className: 'btn primary', async onclick() { d.close(); if (await turnOnNotifications()) toast('Notifications are on'); } }, 'Turn on'))));
 }
 
 function passwordDialog() {

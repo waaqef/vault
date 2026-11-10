@@ -199,6 +199,9 @@ body.paused .bars i { animation-play-state: paused; }
 .empty .disc { width: 64px; height: 64px; margin-bottom: 10px; animation: spin 14s linear infinite; }
 .empty b { color: var(--fg); font-weight: 500; font-size: 15px; }
 .empty.boot { border: 0; margin: 18vh 28px 0; }
+.notify-ask { text-align: center; justify-items: center; max-width: 340px; }
+.notify-ask .btns { justify-content: center; width: 100%; }
+.notify-ic { width: 56px; height: 56px; border-radius: 18px; display: grid; place-items: center; color: var(--on-accent, #141414); background: var(--user-accent); box-shadow: 0 10px 30px rgba(0,0,0,.35); }
 .empty.boot .disc { animation-duration: 1.6s; }
 
 /* ---------- player ---------- */
