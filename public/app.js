@@ -5,7 +5,7 @@ import { decodeAudio, bpmKeyOf, parseName } from './detect.js';
 import { peaksOf, waveSvg } from './wave.js';
 import { makeZip, safeName } from './zip.js';
 
-const APP_VERSION = '[vault] v3.0'; // shown in Settings and sent with bug reports
+const APP_VERSION = '[vault] v3.0.1'; // shown in Settings and sent with bug reports
 // ---- helpers ------------------------------------------------------------------
 const $ = (s, el = document) => el.querySelector(s);
 function h(tag, attrs = {}, ...kids) {
@@ -195,7 +195,7 @@ function pickFiles(accept, multiple = true) {
 // ---- state ----------------------------------------------------------------------
 const S = {
   folders: [], projects: [], tracks: [], usage: 0, limit: 10e9, online: true,
-  view: { type: 'home' }, homeFolder: null, sort: store.get('sort', 'newest'), projectSort: store.get('projectSort', 'manual'), q: '', tag: '',
+  view: { type: 'home' } /* set from the address at start-up: viewFromHash */, homeFolder: null, sort: store.get('sort', 'newest'), projectSort: store.get('projectSort', 'manual'), q: '', tag: '',
   open: new Set(store.get('open', [])), offline: new Set(store.get('offline', [])),
   filter: blankFilter(), select: null, trash: 0, comments: {}, sharedProjects: [], sharedTracks: [], playlists: [],
   searchIn: 'all', commentHits: new Map(), // search: where to look, and tracks whose comments match (from the server)
@@ -215,7 +215,23 @@ function applyTree(d) {
   S.sharedProjects = [...sh.projects, ...sh.singles.map(t => ({ id: 'track:' + t.id, name: t.name, cover: t.cover || t.project_cover, owner: t.owner, role: 'viewer', single: t.id, created_at: t.created_at }))];
   S.sharedTracks = [...sh.tracks, ...sh.singles.map(({ owner, project_cover, ...t }) => ({ ...t, project_id: 'track:' + t.id }))];
 }
-const setView = v => { S.view = v; S.arrange = false; S.select = null; S.homeAll = false; store.set('view', v); document.body.classList.remove('side-open'); render(); };
+// The page you're on is in the address (/library#project/<id>, #playlist/<id>, #starred …), so refreshing keeps it
+// and the browser's back / forward buttons move between pages. Home has no #.
+const viewHash = v => (v.type === 'home' ? '' : v.id ? `#${v.type}/${v.id}` : `#${v.type}`);
+const VIEW_TYPES = ['home', 'all', 'starred', 'offline', 'trash', 'project', 'playlist'];
+function viewFromHash() {
+  const [type, id] = decodeURIComponent(location.hash.slice(1)).split('/');
+  if (!VIEW_TYPES.includes(type) || ((type === 'project' || type === 'playlist') && !id)) return { type: 'home' };
+  return id && (type === 'project' || type === 'playlist') ? { type, id } : { type };
+}
+// replace = fix up the address without adding a step to the back button
+function markView(v, replace = false) {
+  S.view = v; store.set('view', v);
+  const want = viewHash(v);
+  if (location.hash !== want) history[replace ? 'replaceState' : 'pushState'](null, '', location.pathname + location.search + want);
+}
+const setView = v => { markView(v); S.arrange = false; S.select = null; S.homeAll = false; document.body.classList.remove('side-open'); render(); };
+addEventListener('popstate', () => { S.view = viewFromHash(); S.arrange = false; S.select = null; S.homeAll = false; document.body.classList.remove('side-open'); render(); });
 
 // Opened from a share page's "Sign in" / "Sign up": go back there once signed in. Only share links are allowed.
 try {
@@ -246,19 +262,19 @@ async function load() {
     S.online = !(e instanceof TypeError);
     toast(S.online ? `Couldn't load your library: ${e.message}` : "You're offline. Showing your saved library.", { error: S.online, ms: S.online ? 8000 : 3500 });
   }
-  if ((S.view.type === 'project' && !projectOf(S.view.id)) || (S.view.type === 'playlist' && !playlistOf(S.view.id))) S.view = { type: 'all' };
+  if ((S.view.type === 'project' && !projectOf(S.view.id)) || (S.view.type === 'playlist' && !playlistOf(S.view.id))) markView({ type: 'all' }, true);
   render();
   driveBack();
-  if (new URLSearchParams(location.search).has('reports')) { history.replaceState(null, '', '/library'); if (S.me?.isAdmin) reportsDialog(); }
-  if (new URLSearchParams(location.search).has('bugs')) { history.replaceState(null, '', '/library'); if (S.me?.isAdmin) bugsDialog(); }
+  if (new URLSearchParams(location.search).has('reports')) { history.replaceState(null, '', '/library' + viewHash(S.view)); if (S.me?.isAdmin) reportsDialog(); }
+  if (new URLSearchParams(location.search).has('bugs')) { history.replaceState(null, '', '/library' + viewHash(S.view)); if (S.me?.isAdmin) bugsDialog(); }
   const deep = new URLSearchParams(location.search).get('track');
-  if (deep) { history.replaceState(null, '', '/library'); if (trackOf(deep)) (canEdit(trackOf(deep).project_id) ? detailsDialog : commentsDialog)(trackOf(deep)); }
+  if (deep) { history.replaceState(null, '', '/library' + viewHash(S.view)); if (trackOf(deep)) (canEdit(trackOf(deep).project_id) ? detailsDialog : commentsDialog)(trackOf(deep)); }
 }
 
 // Back from connecting Google Drive: ?drive=connected, or what went wrong.
 function driveBack() {
   const back = new URLSearchParams(location.search).get('drive');
-  if (back) { history.replaceState(null, '', '/library'); toast(back === 'connected' ? 'Google Drive connected' : back, { error: back !== 'connected', ms: 6000 }); }
+  if (back) { history.replaceState(null, '', '/library' + viewHash(S.view)); toast(back === 'connected' ? 'Google Drive connected' : back, { error: back !== 'connected', ms: 6000 }); }
 }
 
 function showLogin() {
@@ -1061,7 +1077,7 @@ async function newProject(folder_id) {
   const r = await api('/projects', { method: 'POST', body: { name, folder_id } }).catch(oops);
   if (!r) return;
   if (folder_id) { S.open.add(folder_id); store.set('open', [...S.open]); }
-  S.view = { type: 'project', id: r.id }; store.set('view', S.view);
+  markView({ type: 'project', id: r.id });
   load();
 }
 function folderPicker(title, current, exclude) {
@@ -1196,7 +1212,7 @@ function firstProject() {
       try {
         const { id } = await api('/projects', { method: 'POST', body: { name: name.value.trim() } });
         if (file) await api(`/projects/${id}`, { method: 'PATCH', body: { cover: await uploadFile(file) } }).catch(oops);
-        S.view = { type: 'project', id }; store.set('view', S.view);
+        markView({ type: 'project', id });
         d.close(); await load(); res(id);
       } catch (x) { err.textContent = x.message; btn.disabled = false; }
     } }, h('h2', {}, 'Make your first project'),
@@ -3584,6 +3600,7 @@ addEventListener('online', load);
 addEventListener('offline', () => { S.online = false; render(); });
 // The library saved from last time shows at once and is replaced by the fresh one when it arrives.
 // The very first time there's nothing saved, so it says it's loading instead of showing an empty page.
+S.view = viewFromHash(); // the page you were on (refreshing keeps it)
 const last = store.get('tree');
 if (last?.me) { applyTree(last); render(); }
 else fill($('#main'), h('div', { className: 'empty boot' }, h('span', { className: 'disc' }), h('b', {}, 'Loading your library…')));
