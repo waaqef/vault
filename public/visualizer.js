@@ -1,7 +1,7 @@
 // The visualizer: Alchemy, after Windows Media Player's. A small 3D world that moves with the music: every several
 // seconds it jumps to a random scene (ribbons of dots, bead pillars, waveform sheets, zigzag bursts, rays, rings,
 // string art, wires with stars, a haze), with new colours and a new way the camera and trails move. Each frame is
-// drawn over the last one (slightly moved, blurred and colour-shifted), so one scene melts into the next.
+// drawn over the last one (slightly moved and faded), so one scene melts into the next.
 // Tap for a new scene.
 //
 // It listens to the player's own audio, live: from the first time it opens, the player's sound goes through an
@@ -27,7 +27,7 @@ const hueOf = rgb => { const [r, g, b] = rgb.split(',').map(v => v / 255), mx = 
   if (!d) return 280; const h = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4; return (h * 60 + 360) % 360; };
 
 // How the last frame is carried into the next, per scene: zoom (>1 flows outward), spin, sideways drift,
-// how much of it stays (alpha), blur, and the background.
+// how much of it stays (alpha), and the background. (blur: unused; a filter per frame was far too slow)
 const SCENES = {
   ribbon: () => ({ zoom: 1.004, rot: 0, drift: 1, alpha: 0.9, blur: 1.4, bgc: '#0a0f1c' }),
   pillars: () => ({ zoom: 1, rot: 0, drift: 0.4, alpha: 0.55, blur: 0.4, bgc: '#020203' }),
@@ -60,8 +60,10 @@ export function openVisualizer(host, audio, info, { icon, haptic = () => {}, onC
   addEventListener('keydown', onKey, true);
 
   let W = 0, H = 0, dpr = 1;
-  const buf = document.createElement('canvas'), bg = buf.getContext('2d'), canFilter = 'filter' in g;
-  const fit = () => { dpr = Math.min(devicePixelRatio || 1, 1.5); W = el.clientWidth; H = el.clientHeight; cv.width = buf.width = W * dpr; cv.height = buf.height = H * dpr; };
+  const buf = document.createElement('canvas'), bg = buf.getContext('2d');
+  // Drawn at about 0.7 megapixels whatever the screen (then stretched to fill it): copying the whole frame onto
+  // itself every frame is the costly part, and the softness of the stretch is the original's look anyway.
+  const fit = () => { W = el.clientWidth; H = el.clientHeight; dpr = Math.min(devicePixelRatio || 1, Math.sqrt(700000 / Math.max(1, W * H))); cv.width = buf.width = Math.round(W * dpr); cv.height = buf.height = Math.round(H * dpr); };
   fit(); addEventListener('resize', fit);
   let cols = ['170,190,255'], lastInfo = '';
   const refresh = i => {
@@ -88,7 +90,8 @@ export function openVisualizer(host, audio, info, { icon, haptic = () => {}, onC
   const sparks = [], blob = { x: 0, y: 0, vx: 0, vy: 0 };
   const newScene = () => {
     const kinds = Object.keys(SCENES).filter(k => k !== scene?.kind), kind = pick(kinds);
-    scene = { kind, ...SCENES[kind](), until: t + rnd(7, 14), hue: rnd(0, 360), dir: rnd(0, Math.PI * 2),
+    scene = { kind, ...SCENES[kind](), until: performance.now() / 1000 + rnd(6, 11), // a new scene every 6–11 seconds (real time)
+      hue: rnd(0, 360), dir: rnd(0, Math.PI * 2),
       spokes: Math.floor(rnd(18, 48)), skip: Math.floor(rnd(2, 11)), pts: Math.floor(rnd(30, 70)), arms: Math.floor(rnd(5, 12)),
       cols2: Math.floor(rnd(2, 4)), lines: Math.floor(rnd(10, 22)) };
     cam.vx = rnd(-0.12, 0.12); cam.vy = rnd(-0.15, 0.15); cam.vz = rnd(-0.06, 0.06);
@@ -102,14 +105,14 @@ export function openVisualizer(host, audio, info, { icon, haptic = () => {}, onC
     if (key !== lastInfo) { lastInfo = key; refresh(i); }
     an.getByteFrequencyData(freq);
     an.getByteTimeDomainData(wave);
-    const now = performance.now(), dt = Math.min(0.05, (now - last) / 1000); last = now; t += dt;
+    const now = performance.now(), dt = Math.min(0.1, (now - last) / 1000), clock = now / 1000; last = now; t += dt;
     let bass = 0; for (let j = 1; j < 12; j++) bass += freq[j]; bass /= 11 * 255;
     bassS += (bass - bassS) * (bass > bassS ? 0.5 : 0.08);
     avgBass += (bass - avgBass) * 0.02;
     kick = Math.max(0, kick - dt * 3);
     if (bass > 0.3 && bass > avgBass * 1.35 && kick < 0.4) kick = 1; // the bass jumping well above its recent average
     let level = 0; for (let j = 0; j < freq.length; j += 8) level += freq[j]; level /= (freq.length / 8) * 255;
-    if (!scene || t > scene.until || (kick > 0.95 && t > scene.until - 4)) newScene(); // a big kick near the end jumps early
+    if (!scene || clock > scene.until || (kick > 0.95 && clock > scene.until - 3)) newScene(); // a big kick near the end jumps early
     const sc = scene, cx = W / 2, cy = H / 2, S = Math.min(W, H);
     const hue = hueOf(cols[0]) + sc.hue + t * 14 + bassS * 60; // starts from the cover's colour and keeps drifting round
     const hsl = (h, l = 60, a = 1) => `hsla(${((h % 360) + 360) % 360},95%,${l}%,${a})`;
@@ -123,9 +126,8 @@ export function openVisualizer(host, audio, info, { icon, haptic = () => {}, onC
     const push = sc.drift * S * (0.0045 + level * 0.006), zoom = sc.zoom + bassS * 0.015 + kick * 0.015;
     g.save(); g.translate(cx + Math.cos(sc.dir) * push, cy + Math.sin(sc.dir) * push); g.rotate(sc.rot * (1 + level)); g.scale(zoom, zoom); g.translate(-cx, -cy);
     g.globalAlpha = sc.alpha;
-    if (canFilter) g.filter = `blur(${sc.blur}px) hue-rotate(${(1.5 + level * 4).toFixed(1)}deg) saturate(1.1)`;
     g.drawImage(buf, 0, 0, W, H);
-    g.restore(); g.filter = 'none'; g.globalAlpha = 1;
+    g.restore(); g.globalAlpha = 1;
     g.globalCompositeOperation = 'lighter';
 
     // the camera, and 3D → screen
