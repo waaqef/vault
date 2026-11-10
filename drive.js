@@ -91,6 +91,12 @@ export async function deleteFile(env, user, key) {
   const r = await fetch(`${API}/files/${driveId(key)}`, { method: 'DELETE', headers: await authed(env, user) });
   return { ok: r.ok || r.status === 404 };
 }
+// Which Google account a fresh sign-in belongs to (its email, lowercased).
+export async function whoIs(token) {
+  const r = await fetch(`${API}/about?fields=user(emailAddress)`, { headers: { authorization: `Bearer ${token}` } });
+  const d = r.ok ? await r.json() : null;
+  return (d?.user?.emailAddress || '').toLowerCase();
+}
 export async function quota(env, user) {
   const r = await fetch(`${API}/about?fields=storageQuota,user(emailAddress)`, { headers: await authed(env, user) });
   if (!r.ok) return null;

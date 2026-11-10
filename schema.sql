@@ -43,7 +43,7 @@ CREATE INDEX IF NOT EXISTS shares_target ON shares (kind, target_id);
 CREATE INDEX IF NOT EXISTS listens_share ON listens (share_token);
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY, username TEXT NOT NULL UNIQUE, pass_salt TEXT, pass_hash TEXT, is_admin INTEGER NOT NULL DEFAULT 0,
-  avatar TEXT, storage TEXT NOT NULL DEFAULT 'drive', drive_refresh TEXT, drive_folder TEXT, session TEXT,
+  avatar TEXT, storage TEXT NOT NULL DEFAULT 'drive', drive_refresh TEXT, drive_account TEXT, drive_folder TEXT, session TEXT,
   upload_key TEXT, disabled INTEGER NOT NULL DEFAULT 0, home_layout TEXT, display_name TEXT, last_seen INTEGER, created_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS invites (code TEXT PRIMARY KEY, created_by TEXT NOT NULL, used_by TEXT, used_at INTEGER, created_at INTEGER NOT NULL);
@@ -66,3 +66,4 @@ CREATE INDEX IF NOT EXISTS playlists_owner ON playlists (owner_id);
 CREATE TABLE IF NOT EXISTS reports (id INTEGER PRIMARY KEY AUTOINCREMENT, share_token TEXT NOT NULL, reason TEXT NOT NULL, details TEXT, contact TEXT, reporter_id TEXT, status TEXT NOT NULL DEFAULT 'open', created_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS plays (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, track_id TEXT NOT NULL, at INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS plays_at ON plays (at);
+CREATE UNIQUE INDEX IF NOT EXISTS users_drive_account ON users (drive_account) WHERE drive_account IS NOT NULL;

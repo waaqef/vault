@@ -193,6 +193,7 @@ const adminUsage = async env => (await env.DB.prepare(`SELECT COALESCE(SUM(v.siz
 async function space(env, u) {
   if (usesDrive(env, u)) {
     const q = u.drive_refresh ? await drive.quota(env, u).catch(() => null) : null;
+    if (q?.email && !u.drive_account) await env.DB.prepare('UPDATE users SET drive_account = ? WHERE id = ?').bind(q.email.toLowerCase(), u.id).run().catch(() => {}); // taken already: left empty
     return { usage: q ? q.used : 0, limit: q ? q.limit : 15e9, email: q?.email || '' };
   }
   return { usage: u.storage === 'b2' ? await adminUsage(env) : await usage(env, u), limit: STORAGE_LIMIT };
@@ -942,8 +943,13 @@ async function driveCallback(req, env, url) {
   if (!code) return back(url.searchParams.get('error') === 'access_denied' ? 'Google Drive wasn\'t connected.' : 'Google didn\'t finish. Try again.');
   try {
     const t = await drive.exchangeCode(env, code, driveRedirect(url));
+    // One Google account per [vault] account: the files of two accounts would share one Drive (and one quota).
+    const google = await drive.whoIs(t.access_token);
+    if (!google) return back("Google didn't say which account that was. Try again.");
+    if (await env.DB.prepare('SELECT 1 FROM users WHERE drive_account = ? AND id != ?').bind(google, u.id).first())
+      return back(`${google} is already connected to a different [vault] account. Sign in with a different Google account.`);
     const sealed = await drive.seal(env.APP_PASSWORD, t.refresh_token);
-    await env.DB.prepare("UPDATE users SET drive_refresh = ?, storage = 'drive' WHERE id = ?").bind(sealed, u.id).run();
+    await env.DB.prepare("UPDATE users SET drive_refresh = ?, drive_account = ?, storage = 'drive' WHERE id = ?").bind(sealed, google, u.id).run();
     drive.forget(u.id); // drop any access token from a previously connected Google account
     const fresh = await getUser(env, u.id);
     // A different Google account can't see the old [vault] folder, so make one in this account.
