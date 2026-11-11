@@ -889,13 +889,19 @@ const B2_KEYS = `SELECT k FROM (
   UNION SELECT t.cover FROM tracks t JOIN projects p ON p.id = t.project_id WHERE p.owner_id = ?1
   UNION SELECT cover FROM projects WHERE owner_id = ?1
 ) WHERE k IS NOT NULL AND k NOT LIKE 'drive:%'`;
+// ponytail: the full list is one scan (a few thousand rows), done once per Move press, not once per file.
 on('GET', '/api/move-to-drive', async (req, env, b, p, url, ctx, u) =>
-  json({ left: (await env.DB.prepare(`SELECT COUNT(*) AS n FROM (${B2_KEYS})`).bind(u.id).first()).n, ready: usesDrive(env, u) && !!u.drive_refresh }));
+  json({ keys: (await env.DB.prepare(B2_KEYS).bind(u.id).all()).results.map(r => r.k), ready: usesDrive(env, u) && !!u.drive_refresh }));
+// Is this Backblaze file one of this account's? (each lookup uses an index, so it reads a row or two)
+const ownsKey = (env, u, key) => env.DB.prepare(`SELECT 1 FROM track_versions v JOIN tracks t ON t.id = v.track_id JOIN projects p ON p.id = t.project_id WHERE v.file_key = ?1 AND p.owner_id = ?2
+  UNION ALL SELECT 1 FROM tracks t JOIN projects p ON p.id = t.project_id WHERE t.cover = ?1 AND p.owner_id = ?2
+  UNION ALL SELECT 1 FROM projects WHERE cover = ?1 AND owner_id = ?2 LIMIT 1`).bind(key, u.id).first();
 on('POST', '/api/move-to-drive', async (req, env, b, p, url, ctx, u) => {
   if (!usesDrive(env, u) || !u.drive_refresh) return fail('Connect Google Drive first (Settings → Account → Google Drive).', 409);
-  const row = await env.DB.prepare(`${B2_KEYS} LIMIT 1`).bind(u.id).first();
-  if (!row) return json({ left: 0 });
-  const key = row.k, kind = key.startsWith('cover/') ? 'cover' : 'audio';
+  const key = String(b.key || '');
+  if (!validKey(key) || drive.isDriveKey(key)) return fail('Bad file key');
+  if (!(await ownsKey(env, u, key))) return json({ skipped: true }); // moved already, or not yours
+  const kind = key.startsWith('cover/') ? 'cover' : 'audio';
   const src = await s3(env).fetch(objUrl(env, key));
   if (src.status === 404) { // gone from Backblaze already: nothing to copy, so it can't be moved
     return fail(`A file is missing from Backblaze (${key}). Nothing was changed.`, 404);
@@ -928,7 +934,7 @@ on('POST', '/api/move-to-drive', async (req, env, b, p, url, ctx, u) => {
     env.DB.prepare('UPDATE tracks SET cover = ? WHERE cover = ?').bind(newKey, key),
     env.DB.prepare('UPDATE projects SET cover = ? WHERE cover = ?').bind(newKey, key),
   ]);
-  return json({ moved: key, left: (await env.DB.prepare(`SELECT COUNT(*) AS n FROM (${B2_KEYS})`).bind(u.id).first()).n });
+  return json({ moved: key });
 });
 // Google sends you back here after you allow access.
 // The account comes from the signed state, not the login cookie, so this also works when the iPhone app hands Google's
@@ -1570,6 +1576,8 @@ export default {
       return fail('Not found', 404);
     } catch (e) {
       if (e.status) return fail(e.message, e.status); // one of ours, already in plain words
+      if (/exceeded D1|daily row (read|write) limit/i.test(String(e.message))) // the free database plan's daily allowance
+        return fail("[vault]'s database has used up its free daily allowance. It comes back at midnight UTC (7pm EST). Nothing is lost.", 503);
       console.error(e.stack || e); // unexpected: the details go to the log, not onto someone's screen
       return fail("Something went wrong on [vault]'s side. Try again in a moment.", 500);
     }

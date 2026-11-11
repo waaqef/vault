@@ -5,7 +5,7 @@ import { decodeAudio, bpmKeyOf, parseName, trackInfo, readTags, cleanTitle, lead
 import { peaksOf, waveSvg } from './wave.js';
 import { makeZip, safeName } from './zip.js';
 
-const APP_VERSION = '[vault] v3.13'; // shown in Settings and sent with bug reports
+const APP_VERSION = '[vault] v3.13.1'; // shown in Settings and sent with bug reports
 // ---- helpers ------------------------------------------------------------------
 const $ = (s, el = document) => el.querySelector(s);
 function h(tag, attrs = {}, ...kids) {
@@ -3384,14 +3384,16 @@ async function moveToDrive() {
   let st;
   try { st = await api('/move-to-drive'); } catch (e) { return oops(e); }
   if (!st.ready) return toast('Connect Google Drive first: Settings → Account → Google Drive → Connect.', { ms: 8000 });
-  if (!st.left) return toast('Everything is already in Google Drive.');
-  if (!(await confirm('Move to Google Drive?', `${st.left} files (songs, every version, and covers) get copied into your Google Drive. Keep this tab open while it runs; if it stops, press Move again and it carries on where it left off. The copies on Backblaze aren't deleted.`, 'Move'))) return;
-  const total = st.left, note = toast('', { ms: 0 });
+  const keys = st.keys || [];
+  if (!keys.length) return toast('Everything is already in Google Drive.');
+  if (!(await confirm('Move to Google Drive?', `${keys.length} files (songs, every version, and covers) get copied into your Google Drive. Keep this tab open while it runs; if it stops, press Move again and it carries on where it left off. The copies on Backblaze aren't deleted.`, 'Move'))) return;
+  const total = keys.length, note = toast('', { ms: 0 });
   let left = total;
   try {
-    while (left > 0) {
+    for (const key of keys) {
       note.textContent = `Moving to Google Drive: ${total - left + 1} of ${total}… (keep this tab open)`;
-      left = (await api('/move-to-drive', { method: 'POST' })).left;
+      await api('/move-to-drive', { method: 'POST', body: { key } });
+      left--;
     }
     note.remove();
     toast(`Done: all ${total} files are in Google Drive.`, { ms: 8000 });
