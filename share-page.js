@@ -93,6 +93,8 @@ function show(d) {
   // Signed in to [vault]: full songs, comments, downloads and saving. Otherwise: short previews and a sign-in card.
   const full = !!d.viewer || d.public, next = encodeURIComponent(location.pathname); // public links: full songs for everyone
   a.controls = full; // a preview's player bar would show the cut-down length
+  // Downloads off: the browser's own player hides its "Download" (⋮ menu) and right-click "Save audio as"
+  if (!d.allow_download) { a.setAttribute('controlsList', 'nodownload'); a.oncontextmenu = e => e.preventDefault(); }
   const gate = full ? null : el('div', { className: 'gate' },
     el('div', { className: 'mono', textContent: '[preview]' }),
     el('p', { textContent: 'You\u2019re hearing ' + d.preview + '-second previews. Sign in to [vault] to hear the full songs, comment' + (d.allow_download ? ', download' : '') + ' and save this to your library.' }),
